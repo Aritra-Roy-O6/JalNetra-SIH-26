@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import uuid
@@ -18,12 +18,11 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     query_id: str
     response: str
-    language: str
+    intent: str
     reasoning_trace: Dict[str, Any]
-    geojson: Optional[Dict[str, Any]] = None
 
 @router.post("/query", response_model=QueryResponse)
-async def handle_user_query(request: QueryRequest):
+async def process_user_query(request: QueryRequest):
     query_id = str(uuid.uuid4())
     
     initial_state: AgentState = {
@@ -44,16 +43,14 @@ async def handle_user_query(request: QueryRequest):
         "geojson_overlays": None
     }
     
-    # Execute LangGraph Pipeline
     final_state = await orchestrator.ainvoke(initial_state)
     
     return QueryResponse(
         query_id=query_id,
         response=final_state["final_text_response"],
-        language=final_state["detected_language"],
+        intent=final_state.get("intent", "general"),
         reasoning_trace={
             "nodes": final_state["nodes"],
             "edges": final_state["edges"]
-        },
-        geojson=final_state.get("geojson_overlays")
+        }
     )
