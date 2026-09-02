@@ -18,19 +18,19 @@ class AgentState(TypedDict):
     translated_query: str
     intent: Optional[str]
     
-    # Location context (lat, lon)
+    # Coordinates (lat, lon)
     user_location: Optional[Dict[str, float]]
     
-    # Data retrieved across agent executions
+    # Intermediate state populated by domain agents
     ocean_data: Optional[Dict[str, Any]]
     weather_data: Optional[Dict[str, Any]]
     geofence_data: Optional[List[Dict[str, Any]]]
     route_data: Optional[Dict[str, Any]]
     
-    # Graph Visual Trace Construction
+    # Graph Visual Trace (for UI rendering)
     nodes: List[ReasoningNode]
     edges: List[ReasoningEdge]
     
-    # Final outputs
+    # Final Output
     final_text_response: str
     geojson_overlays: Optional[Dict[str, Any]]
