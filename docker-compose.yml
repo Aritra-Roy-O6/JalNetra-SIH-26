@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: orca_db_container
+    restart: always
+    environment:
+      POSTGRES_USER: admin          
+      POSTGRES_PASSWORD: password123 
+      POSTGRES_DB: JalNetra_db          
+    ports:
+      - "5433:5432"
