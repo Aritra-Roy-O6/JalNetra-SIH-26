@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@xyflow/react": "^12.11.6",
     "dexie": "^4.4.5",
     "leaflet": "^1.9.4",
     "mapbox-gl": "^3.29.0",
