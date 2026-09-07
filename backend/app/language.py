@@ -101,5 +101,7 @@ def translate_to_english(text: str, language: str) -> str:
     return clean
 
 def translate_answer(intent: str, language: str, values: dict) -> str:
+    if values.get("available") is False:
+        return values["english"]
     template = ANSWER_TRANSLATIONS.get(language, {}).get(intent)
     return template.format(**values) if template else values["english"]

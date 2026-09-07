@@ -13,6 +13,7 @@ const QUICK_QUERIES = [
   ["boundary warning", "Check boundary"],
   ["why low catch", "Explain low catch"],
 ];
+const DEFAULT_MAP_STATE = { center: [20.25, 88.45], zoom: 5 };
 
 export default function DashboardPage() {
   const [pfz, setPfz] = useState(null);
@@ -22,14 +23,14 @@ export default function DashboardPage() {
   const [trace, setTrace] = useState(null);
   const [status, setStatus] = useState("Connecting to JalNetra API");
   const [loading, setLoading] = useState(false);
-  const [mapState, setMapState] = useState(null);
+  const [mapState, setMapState] = useState(DEFAULT_MAP_STATE);
   const [history, setHistory] = useState([]);
   const [intent, setIntent] = useState(null);
   const [language, setLanguage] = useState("en-IN");
   const [logs, setLogs] = useState([]);
 
   useEffect(() => {
-    Promise.all([fetchPFZ(), fetchAlerts()])
+    Promise.all([fetchPFZ({ latitude: DEFAULT_MAP_STATE.center[0], longitude: DEFAULT_MAP_STATE.center[1] }), fetchAlerts()])
       .then(([pfzData, alertData]) => {
         setPfz(pfzData);
         setAlerts(alertData);
@@ -62,7 +63,7 @@ export default function DashboardPage() {
     setLoading(true);
     setStatus("Checking marine evidence…");
     try {
-      const result = await postQuery(submittedQuery, { language });
+      const result = await postQuery(submittedQuery, { language, latitude: mapState.center[0], longitude: mapState.center[1] });
       setAnswer(result.answer || "No answer returned.");
       setTrace(result.visual_trace);
       setLogs(result.execution_log || []);

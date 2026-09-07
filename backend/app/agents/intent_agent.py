@@ -1,13 +1,48 @@
+"""Intent, language, and location extraction."""
+
+import re
+from datetime import date, timedelta
+
+from app.language import detect_language, translate_to_english
 from app.agents.state import AgentState
 
-def process_intent(state: AgentState) -> AgentState:
-    query = state["raw_query"].lower()
-    
-    if any(k in query for k in ["fish", "pfz", "catch", "chlorophyll", "sst"]):
-        state["intent"] = "pfz"
-    elif any(k in query for k in ["weather", "cyclone", "wave", "wind", "safe"]):
-        state["intent"] = "weather"
-    else:
-        state["intent"] = "general"
-        
-    return state
+
+def _intent(query: str) -> str:
+    query = query.lower()
+    if any(word in query for word in ("route", "navigate", "waypoint")):
+        return "Route"
+    if any(word in query for word in ("boundary", "restricted", "regulation", "geofence")):
+        return "Regulation"
+    if any(word in query for word in ("weather", "wind", "wave", "cyclone", "storm", "safe")):
+        return "Weather"
+    if any(word in query for word in ("fish", "pfz", "catch", "chlorophyll", "sst", "low catch")):
+        return "PFZ"
+    return "Weather"
+
+
+def _entities(query: str, location: dict | None) -> dict:
+    entities = {"coordinates": [location["latitude"], location["longitude"]]} if location else {}
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*[,/]\s*(-?\d+(?:\.\d+)?)", query)
+    if match:
+        entities["coordinates"] = [float(match.group(1)), float(match.group(2))]
+    if "tomorrow" in query.lower():
+        entities["date"] = str(date.today() + timedelta(days=1))
+    return entities
+
+
+def intent_translation_agent(state: AgentState) -> AgentState:
+    original = state.get("original_query", state["query"])
+    language = state.get("requested_language", "en-IN")
+    detected = detect_language(original, language)
+    translated = translate_to_english(original, detected)
+    intent = _intent(translated)
+    agents = {"PFZ": ["ocean"], "Weather": ["weather"], "Regulation": ["geofence"], "Route": ["weather", "geofence", "route"]}[intent]
+    return {
+        "original_query": original,
+        "translated_query": translated,
+        "requested_language": language,
+        "detected_language": detected,
+        "intent": intent,
+        "entities": _entities(translated, state.get("location")),
+        "sub_tasks": [{"intent": intent, "agents": agents}],
+    }

@@ -1,5 +1,5 @@
 """Compatibility export for the JalNetra compiled graph."""
 
-from app.agent_orchestrator import graph
+from app.agents.orchestrator import graph
 
 __all__ = ["graph"]

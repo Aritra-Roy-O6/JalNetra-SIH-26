@@ -51,10 +51,10 @@ export function fetchAlerts(params) {
   return requestJson(withParams("/api/v1/alerts", params));
 }
 
-export function postQuery(query, { language = "en-IN", userId = "dashboard-user" } = {}) {
+export function postQuery(query, { language = "en-IN", userId = "dashboard-user", latitude, longitude } = {}) {
   return requestJson("/api/v1/query", {
     method: "POST",
-    body: JSON.stringify({ query, language, user_id: userId }),
+    body: JSON.stringify({ query, language, user_id: userId, latitude, longitude }),
   });
 }
 

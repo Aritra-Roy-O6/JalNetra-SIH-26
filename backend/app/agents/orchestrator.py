@@ -1,89 +1,43 @@
-from langgraph.graph import StateGraph, END
+"""Central LangGraph traffic controller."""
+
+from langgraph.graph import END, START, StateGraph
+
+from app.agents.geospatial_agent import geospatial_geofencing_agent
+from app.agents.intent_agent import intent_translation_agent
+from app.agents.ocean_agent import ocean_analytics_agent
+from app.agents.reporting_agent import reporting_agent
+from app.agents.route_agent import route_optimization_agent
 from app.agents.state import AgentState
-from app.graph.knowledge_graph import kg_instance
+from app.agents.synthesis_agent import synthesizing_agent
+from app.agents.weather_agent import weather_safety_agent
 
-# Agent Nodes
-def process_intent(state: AgentState) -> AgentState:
-    query = state["raw_query"].lower()
-    
-    if any(k in query for k in ["fish", "pfz", "catch", "chlorophyll", "sst"]):
-        state["intent"] = "pfz"
-    elif any(k in query for k in ["weather", "cyclone", "wave", "wind", "safe"]):
-        state["intent"] = "weather"
-    else:
-        state["intent"] = "general"
-        
-    return state
+AGENT_NODES = ("ocean", "weather", "geofence", "route", "reporting")
 
-def process_ocean(state: AgentState) -> AgentState:
-    nodes, edges = kg_instance.get_related_nodes("Zone_PFZ_01")
-    state["nodes"].extend(nodes)
-    state["edges"].extend(edges)
-    state["ocean_data"] = {
-        "sst_celsius": 28.5,
-        "chlorophyll_mg_m3": 2.4,
-        "confidence": 0.89
-    }
-    return state
 
-def process_weather(state: AgentState) -> AgentState:
-    nodes, edges = kg_instance.get_related_nodes("Hazard_Cyclone_01")
-    state["nodes"].extend(nodes)
-    state["edges"].extend(edges)
-    state["weather_data"] = {
-        "wind_speed_knots": 18,
-        "wave_height_m": 1.2,
-        "warning": "Moderate sea conditions"
-    }
-    return state
+def route_sub_tasks(state: AgentState) -> list[str]:
+    selected = []
+    for task in state.get("sub_tasks", []):
+        for name in task.get("agents", []):
+            if name in AGENT_NODES and name not in selected:
+                selected.append(name)
+    return selected or ["weather"]
 
-def synthesize_response(state: AgentState) -> AgentState:
-    intent = state.get("intent")
-    
-    if intent == "pfz":
-        data = state.get("ocean_data", {})
-        state["final_text_response"] = (
-            f"Favourable PFZ detected with SST at {data.get('sst_celsius')}°C "
-            f"and Chlorophyll level at {data.get('chlorophyll_mg_m3')} mg/m³. "
-            f"Confidence score: {int(data.get('confidence', 0)*100)}%."
-        )
-    elif intent == "weather":
-        data = state.get("weather_data", {})
-        state["final_text_response"] = (
-            f"Current sea status: {data.get('warning')}. "
-            f"Wind speed is {data.get('wind_speed_knots')} knots with wave heights around {data.get('wave_height_m')}m."
-        )
-    else:
-        state["final_text_response"] = "Query processed. All coastal zones report standard conditions."
 
-    return state
+def build_graph():
+    workflow = StateGraph(AgentState)
+    workflow.add_node("intent", intent_translation_agent)
+    workflow.add_node("ocean", ocean_analytics_agent)
+    workflow.add_node("weather", weather_safety_agent)
+    workflow.add_node("geofence", geospatial_geofencing_agent)
+    workflow.add_node("route", route_optimization_agent)
+    workflow.add_node("reporting", reporting_agent)
+    workflow.add_node("synthesizer", synthesizing_agent)
+    workflow.add_edge(START, "intent")
+    workflow.add_conditional_edges("intent", route_sub_tasks, {name: name for name in AGENT_NODES})
+    for name in AGENT_NODES:
+        workflow.add_edge(name, "synthesizer")
+    workflow.add_edge("synthesizer", END)
+    return workflow.compile()
 
-# Intent Router
-def route_intent(state: AgentState) -> str:
-    return "ocean_node" if state["intent"] == "pfz" else "weather_node" if state["intent"] == "weather" else "synthesizer_node"
 
-# Workflow Setup
-workflow = StateGraph(AgentState)
-
-workflow.add_node("intent_node", process_intent)
-workflow.add_node("ocean_node", process_ocean)
-workflow.add_node("weather_node", process_weather)
-workflow.add_node("synthesizer_node", synthesize_response)
-
-workflow.set_entry_point("intent_node")
-
-workflow.add_conditional_edges(
-    "intent_node",
-    route_intent,
-    {
-        "ocean_node": "ocean_node",
-        "weather_node": "weather_node",
-        "synthesizer_node": "synthesizer_node"
-    }
-)
-
-workflow.add_edge("ocean_node", "synthesizer_node")
-workflow.add_edge("weather_node", "synthesizer_node")
-workflow.add_edge("synthesizer_node", END)
-
-orchestrator = workflow.compile()
+graph = build_graph()

@@ -4,9 +4,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.agent_orchestrator import demo_query, graph
-from app.language import normalize_language, translate_answer, translate_to_english
-from pfz_heuristics import generate_mock_pfz
+from app.agents.orchestrator import graph
+from app.language import normalize_language
+from app.pfz_model import MODEL_FEATURES, current_pfz_prediction, load_pfz_model
 from services.sarvam_service import SarvamServiceError, speech_to_text, text_to_speech
 
 
@@ -18,6 +18,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+PFZ_MODEL = load_pfz_model()
 
 
 class QueryRequest(BaseModel):
@@ -26,71 +27,29 @@ class QueryRequest(BaseModel):
     query: str
     language: str = "en-IN"
     user_id: str | None = None
-
-
-class SmsRequest(BaseModel):
-    phone: str | None = None
-    message: str | None = None
-
-
-MOCK_ALERTS = [
-    {
-        "id": "alert-cyclone-01",
-        "type": "cyclone",
-        "severity": "high",
-        "message": "Mock cyclone advisory near the Odisha coast.",
-        "source": "mock_weather_service",
-    },
-    {
-        "id": "alert-geofence-01",
-        "type": "geofence",
-        "severity": "medium",
-        "message": "Seasonal protected-area restriction is active.",
-        "source": "mock_regulatory_graph",
-    },
-]
+    latitude: float | None = None
+    longitude: float | None = None
+    distance_to_coast_km: float | None = None
 
 
 @app.get("/api/v1/pfz")
-def get_pfz() -> dict:
-    """Return deterministic Potential Fishing Zone GeoJSON."""
-    return generate_mock_pfz()
+def get_pfz(latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
+    """Return a model-backed PFZ prediction and feature provenance."""
+    prediction = current_pfz_prediction(latitude, longitude, distance_to_coast_km, PFZ_MODEL)
+    return {"model_features": MODEL_FEATURES, "prediction": prediction}
 
 
 @app.get("/api/v1/alerts")
 def get_alerts() -> list[dict]:
-    """Return active mock weather and geofence alerts."""
-    return MOCK_ALERTS
+    """Return live alerts when an ingestion service is configured."""
+    return []
 
 
-def run_query(query: str, language: str = "en-IN") -> dict:
+def run_query(query: str, language: str = "en-IN", latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
     """Run the LangGraph workflow and return its structured response."""
     requested_language = normalize_language(language)
-    translated_query = translate_to_english(query, requested_language)
-    if demo := demo_query(translated_query):
-        demo_payload = dict(demo)
-        demo_payload["answer"] = translate_answer(demo["intent"], requested_language, {
-            "english": demo["answer"],
-            "location": "Odisha coast",
-            "confidence": "91%",
-            "wave": "3.2",
-            "threshold": "2.5",
-            "zone": "Indian EEZ",
-            "restriction": "Seasonal_Ban",
-            "hazards": "active hazards",
-        })
-        return {
-            "query": query,
-            "original_query": query,
-            "translated_query": translated_query,
-            "language": requested_language,
-            **demo_payload,
-            "execution_log": [
-                {"level": "info", "stage": "translation", "message": f"English context: {translated_query}"},
-                {"level": "success", "stage": "demo", "message": "Returned cached pitch response."},
-            ],
-        }
-    result = graph.invoke({"query": query, "original_query": query, "requested_language": requested_language})
+    location = None if latitude is None or longitude is None else {"latitude": latitude, "longitude": longitude, "distance_to_coast_km": distance_to_coast_km}
+    result = graph.invoke({"query": query, "original_query": query, "requested_language": requested_language, "location": location})
     return {
         "query": query,
         "original_query": result.get("original_query", query),
@@ -106,13 +65,7 @@ def run_query(query: str, language: str = "en-IN") -> dict:
 
 @app.post("/api/v1/query")
 def submit_query(request: QueryRequest) -> dict:
-    return run_query(request.query, request.language)
-
-
-@app.post("/api/v1/sms")
-def send_mock_sms(request: SmsRequest) -> dict:
-    """Return the alert text that the prototype would send by SMS."""
-    return {"status": "sent", "alert": "JalNetra: protected boundary nearby. Check route before sailing."}
+    return run_query(request.query, request.language, request.latitude, request.longitude, request.distance_to_coast_km)
 
 
 @app.post("/api/v1/voice-query")
