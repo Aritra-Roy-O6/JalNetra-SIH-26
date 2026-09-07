@@ -7,6 +7,9 @@ class AgentState(TypedDict, total=False):
     """Shared state passed through the LangGraph workflow."""
 
     query: str
+    original_query: str
+    translated_query: str
+    requested_language: str
     detected_language: str
     intent: str
     entities: dict
@@ -17,4 +20,6 @@ class AgentState(TypedDict, total=False):
     route_result: dict
     report_result: dict
     response: str
+    execution_log: list[dict]
+    geojson: dict | None
     visual_trace: dict

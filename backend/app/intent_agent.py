@@ -3,7 +3,7 @@
 import re
 from datetime import date, timedelta
 
-from app.llm import invoke_text
+from app.language import detect_language, translate_to_english
 from app.state import AgentState
 
 INTENT_CATEGORIES = (
@@ -66,18 +66,17 @@ def _tasks_for_query(query: str, primary_intent: str) -> list[dict]:
 
 def intent_translation_agent(state: AgentState) -> AgentState:
     """Detect language, classify intent, extract entities, and create sub-tasks."""
-    query = state["query"]
-    llm_result = invoke_text(
-        "Classify this marine query as one category: "
-        f"{', '.join(INTENT_CATEGORIES)}. Return only the category. Query: {query}"
-    )
-    intent = next(
-        (category for category in INTENT_CATEGORIES if category.lower() in (llm_result or "").lower()),
-        _fallback_intent(query),
-    )
+    original_query = state.get("original_query", state["query"])
+    requested_language = state.get("requested_language", "en-IN")
+    detected_language = detect_language(original_query, requested_language)
+    query = translate_to_english(original_query, detected_language)
+    intent = _fallback_intent(query)
     return {
+        "original_query": original_query,
+        "translated_query": query,
+        "requested_language": requested_language,
         "intent": intent,
-        "detected_language": "en",
+        "detected_language": detected_language,
         "entities": _extract_entities(query),
         "sub_tasks": _tasks_for_query(query, intent),
     }

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Final
 
 import requests
+from dotenv import load_dotenv
 
 SARVAM_BASE_URL: Final = "https://api.sarvam.ai"
+SUPPORTED_AUDIO_TYPES: Final = {"audio/webm", "audio/wav", "audio/mpeg"}
+
+# Load the backend-local file regardless of whether Uvicorn starts from the
+# repository root or the backend directory. Existing deployment variables win.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 class SarvamServiceError(RuntimeError):
@@ -19,10 +26,19 @@ class SarvamServiceError(RuntimeError):
 
 
 def _headers() -> dict[str, str]:
-    api_key = os.getenv("SARVAM_API_KEY")
+    api_key = os.getenv("SARVAM_API_KEY", "").strip()
     if not api_key:
         raise SarvamServiceError("Voice service is not configured. Set SARVAM_API_KEY.")
     return {"api-subscription-key": api_key}
+
+
+def _normalized_audio_type(content_type: str) -> str:
+    """Strip browser codec parameters and accept Sarvam's supported MIME types."""
+    normalized = content_type.split(";", maxsplit=1)[0].strip().lower()
+    normalized = {"audio/x-wav": "audio/wav", "audio/mp3": "audio/mpeg"}.get(normalized, normalized)
+    if normalized not in SUPPORTED_AUDIO_TYPES:
+        raise SarvamServiceError("Upload a short WebM, WAV, or MP3 recording.", 415)
+    return normalized
 
 
 def _request_error(error: requests.RequestException, operation: str) -> SarvamServiceError:
@@ -33,7 +49,11 @@ def _request_error(error: requests.RequestException, operation: str) -> SarvamSe
     if response is not None:
         try:
             payload = response.json()
-            provider_message = payload.get("error", {}).get("message") or payload.get("message", "")
+            if isinstance(payload, dict):
+                error_detail = payload.get("error", {})
+                provider_message = (
+                    error_detail.get("message", "") if isinstance(error_detail, dict) else ""
+                ) or str(payload.get("message", ""))
         except ValueError:
             pass
     if status_code in (401, 403):
@@ -65,9 +85,7 @@ def speech_to_text(
         raise SarvamServiceError("The uploaded recording is empty.")
 
     try:
-        # Browsers commonly label MediaRecorder blobs as
-        # ``audio/webm;codecs=opus``; Sarvam expects the standard MIME subtype.
-        normalized_content_type = content_type.split(";", maxsplit=1)[0]
+        normalized_content_type = _normalized_audio_type(content_type)
         response = requests.post(
             f"{SARVAM_BASE_URL}/speech-to-text",
             headers=_headers(),
@@ -80,7 +98,8 @@ def speech_to_text(
             timeout=45,
         )
         response.raise_for_status()
-        transcript = response.json().get("transcript", "").strip()
+        payload = response.json()
+        transcript = payload.get("transcript", "").strip() if isinstance(payload, dict) else ""
     except requests.RequestException as error:
         raise _request_error(error, "speech transcription") from error
     except (TypeError, ValueError) as error:
@@ -110,7 +129,8 @@ def text_to_speech(text: str, language_code: str = "hi-IN") -> str:
             timeout=45,
         )
         response.raise_for_status()
-        audios = response.json().get("audios", [])
+        payload = response.json()
+        audios = payload.get("audios", []) if isinstance(payload, dict) else []
     except requests.RequestException as error:
         raise _request_error(error, "speech playback") from error
     except (TypeError, ValueError) as error:

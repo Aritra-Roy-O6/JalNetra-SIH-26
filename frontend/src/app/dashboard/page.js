@@ -5,8 +5,14 @@ import GeospatialMap from "@/components/GeospatialMap";
 import ReasoningTracePanel from "@/components/ReasoningTracePanel";
 import VoiceInterface from "@/components/VoiceInterface";
 import { ApiError, fetchAlerts, fetchPFZ, postQuery } from "@/lib/api";
+import { loadLastChatMessage, loadMapState, loadRecentChatMessages, saveChatMessage, saveMapState } from "@/lib/db";
 
 const DEFAULT_QUERY = "Where is the nearest Potential Fishing Zone today?";
+const QUICK_QUERIES = [
+  ["where fish", "Find fishing zone"],
+  ["boundary warning", "Check boundary"],
+  ["why low catch", "Explain low catch"],
+];
 
 export default function DashboardPage() {
   const [pfz, setPfz] = useState(null);
@@ -16,6 +22,11 @@ export default function DashboardPage() {
   const [trace, setTrace] = useState(null);
   const [status, setStatus] = useState("Connecting to JalNetra API");
   const [loading, setLoading] = useState(false);
+  const [mapState, setMapState] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [intent, setIntent] = useState(null);
+  const [language, setLanguage] = useState("en-IN");
+  const [logs, setLogs] = useState([]);
 
   useEffect(() => {
     Promise.all([fetchPFZ(), fetchAlerts()])
@@ -24,27 +35,67 @@ export default function DashboardPage() {
         setAlerts(alertData);
         setStatus("Live prototype data loaded");
       })
-      .catch((error) => setStatus(error.message));
+      .catch((error) => {
+        setStatus(error.message);
+        setLogs((current) => [...current, { level: "error", stage: "startup", message: error.message }]);
+      });
   }, []);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (!query.trim()) {
+  useEffect(() => {
+    Promise.all([loadMapState(), loadLastChatMessage(), loadRecentChatMessages()]).then(([savedMap, savedChat, savedHistory]) => {
+      if (savedMap) setMapState({ center: savedMap.center, zoom: savedMap.zoom });
+      setHistory(savedHistory);
+      if (savedChat) {
+        setQuery(savedChat.query);
+        setAnswer(savedChat.answer);
+      }
+    });
+  }, []);
+
+  async function submitQuery(rawQuery) {
+    const submittedQuery = rawQuery.trim();
+    if (!submittedQuery) {
       return;
     }
 
+    setQuery(submittedQuery);
     setLoading(true);
-    setStatus("Running agent workflow");
+    setStatus("Checking marine evidence…");
     try {
-      const result = await postQuery(query.trim());
+      const result = await postQuery(submittedQuery, { language });
       setAnswer(result.answer || "No answer returned.");
       setTrace(result.visual_trace);
+      setLogs(result.execution_log || []);
+      if (result.geojson) setPfz(result.geojson);
+      await saveChatMessage(submittedQuery, result.answer || "No answer returned.");
+      setHistory(await loadRecentChatMessages());
+      setIntent(result.intent || "Marine query");
+      setLanguage(result.language || language);
       setStatus(`Intent detected: ${result.intent || "Marine query"}`);
     } catch (error) {
-      setStatus(error instanceof ApiError ? error.message : "Query failed.");
+      const message = error instanceof ApiError ? error.message : "Query failed.";
+      setStatus(message);
+      setLogs((current) => [...current, { level: "error", stage: "api", message }]);
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    submitQuery(query);
+  }
+
+  async function handleVoiceResult(result) {
+    setQuery(result.transcribed_text);
+    setAnswer(result.answer);
+    setTrace(result.visual_trace || null);
+    setLogs(result.execution_log || []);
+    setIntent(result.intent || "Marine query");
+    setLanguage(result.language || language);
+    if (result.geojson) setPfz(result.geojson);
+    await saveChatMessage(result.transcribed_text, result.answer);
+    setHistory(await loadRecentChatMessages());
   }
 
   return (
@@ -60,7 +111,7 @@ export default function DashboardPage() {
               PFZ, marine alerts, geofences, and explainable agent reasoning for coastal operations.
             </p>
           </div>
-          <div className="border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+          <div role="status" className="border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
             {status}
           </div>
         </div>
@@ -75,13 +126,18 @@ export default function DashboardPage() {
             <form onSubmit={handleSubmit} className="space-y-3 p-4">
               <VoiceInterface
                 disabled={loading}
-                onStatus={setStatus}
-                onResult={(result) => {
-                  setQuery(result.transcribed_text);
-                  setAnswer(result.answer);
-                  setTrace(result.visual_trace || null);
+                onStatus={(message) => {
+                  setStatus(message);
+                  if (/unavailable|error|failed|quota|configured/i.test(message)) {
+                    setLogs((current) => [...current, { level: "error", stage: "voice", message }]);
+                  }
                 }}
+                onResult={handleVoiceResult}
               />
+              <label className="block text-sm font-medium text-slate-700" htmlFor="query-language">Answer language</label>
+              <select id="query-language" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={loading} className="w-full border border-slate-300 px-3 py-2 text-sm">
+                <option value="en-IN">English</option><option value="hi-IN">हिन्दी (Hindi)</option><option value="ta-IN">தமிழ் (Tamil)</option><option value="te-IN">తెలుగు (Telugu)</option><option value="bn-IN">বাংলা (Bengali)</option><option value="od-IN">ଓଡ଼ିଆ (Odia)</option>
+              </select>
               <label className="block text-sm font-medium text-slate-700" htmlFor="query">
                 Fisherman / authority question
               </label>
@@ -98,15 +154,31 @@ export default function DashboardPage() {
               >
                 {loading ? "Processing" : "Ask ORCA"}
               </button>
+              <div className="border-t border-slate-200 pt-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Instant demo checks</p>
+                <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
+                  {QUICK_QUERIES.map(([quickQuery, label]) => (
+                    <button key={quickQuery} type="button" disabled={loading} onClick={() => submitQuery(quickQuery)} className="border border-slate-300 px-2 py-2 text-left text-xs font-medium text-slate-700 hover:border-blue-700 hover:text-blue-800 disabled:text-slate-400">
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </form>
           </section>
 
           <section className="border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Answer</h2>
+            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3">
+              <h2 className="text-base font-semibold">Recommended action</h2>
+              {intent && <span className="bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-900">{intent}</span>}
             </div>
             <p className="p-4 text-sm leading-6 text-slate-700">{answer}</p>
           </section>
+
+          {history.length > 0 && <section className="border border-slate-300 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3"><h2 className="text-base font-semibold">Available offline</h2></div>
+            <div className="divide-y divide-slate-100">{history.map((item) => <button key={item.id} type="button" onClick={() => { setQuery(item.query); setAnswer(item.answer); }} className="w-full px-4 py-3 text-left text-sm hover:bg-slate-50"><span className="block font-medium text-slate-800">{item.query}</span><span className="block truncate text-xs text-slate-500">{item.answer}</span></button>)}</div>
+          </section>}
 
           <section className="border border-slate-300 bg-white">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
@@ -129,21 +201,30 @@ export default function DashboardPage() {
           </section>
         </aside>
 
-        <section className="grid min-h-[760px] gap-4 xl:grid-rows-[1fr_360px]">
+        <section className="grid gap-4 xl:min-h-[760px] xl:grid-rows-[1fr_360px]">
           <section className="overflow-hidden border border-slate-300 bg-white">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
               <h2 className="text-base font-semibold">Geospatial Operations Map</h2>
             </div>
-            <div className="h-[460px] xl:h-full">
-              <GeospatialMap pfz={pfz} alerts={alerts} />
+            <div className="h-[min(62vh,460px)] min-h-[360px] xl:h-full">
+              <GeospatialMap
+                pfz={pfz}
+                alerts={alerts}
+                mapState={mapState}
+                onMapChange={(nextMapState) => {
+                  setMapState(nextMapState);
+                  saveMapState(nextMapState);
+                }}
+              />
             </div>
           </section>
 
           <section className="border border-slate-300 bg-white">
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Visual Reasoning Trace</h2>
+              <h2 className="text-base font-semibold">Why JalNetra recommends this</h2>
+              <p className="mt-1 text-xs text-slate-600">Follow the evidence from your question through each specialist to the final answer.</p>
             </div>
-            <ReasoningTracePanel trace={trace} />
+              <ReasoningTracePanel trace={trace} logs={logs} />
           </section>
         </section>
       </section>

@@ -20,6 +20,9 @@ type VoiceResult = {
   audio_base64?: string | null;
   audio_mime_type?: string | null;
   visual_trace?: unknown;
+  execution_log?: unknown[];
+  original_query?: string;
+  translated_query?: string;
   voice_error?: string | null;
 };
 

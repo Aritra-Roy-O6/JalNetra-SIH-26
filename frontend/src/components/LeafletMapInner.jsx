@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+import { useMap, useMapEvents } from "react-leaflet";
 import { GeoJSON, MapContainer, TileLayer } from "react-leaflet";
 
 const ALERT_ZONES = {
@@ -70,13 +72,36 @@ function bindPopup(feature, layer) {
   layer.bindPopup(`<strong>${props.name || props.zone_type || "Marine zone"}</strong>`);
 }
 
-export default function LeafletMapInner({ pfz, alerts }) {
+function MapStateSaver({ onMapChange }) {
+  useMapEvents({
+    moveend(event) {
+      const map = event.target;
+      const center = map.getCenter();
+      onMapChange?.({ center: [center.lat, center.lng], zoom: map.getZoom() });
+    },
+  });
+  return null;
+}
+
+function MapStateRestorer({ mapState }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!mapState) return;
+    const center = map.getCenter();
+    if (center.lat !== mapState.center[0] || center.lng !== mapState.center[1] || map.getZoom() !== mapState.zoom) {
+      map.setView(mapState.center, mapState.zoom, { animate: false });
+    }
+  }, [map, mapState]);
+  return null;
+}
+
+export default function LeafletMapInner({ pfz, alerts, mapState, onMapChange }) {
   const activeAlerts = alertCollection(alerts);
 
   return (
     <MapContainer
-      center={[20.25, 88.45]}
-      zoom={8}
+      center={mapState?.center || [20.25, 88.45]}
+      zoom={mapState?.zoom || 8}
       scrollWheelZoom
       className="h-full min-h-[360px] w-full"
       maxBounds={[
@@ -89,6 +114,8 @@ export default function LeafletMapInner({ pfz, alerts }) {
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <MapStateRestorer mapState={mapState} />
+      <MapStateSaver onMapChange={onMapChange} />
       {pfz?.features?.length ? (
         <GeoJSON data={pfz} style={styleFeature} onEachFeature={bindPopup} />
       ) : null}

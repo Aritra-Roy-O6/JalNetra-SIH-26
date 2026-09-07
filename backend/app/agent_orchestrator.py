@@ -16,8 +16,42 @@ from app.route_agent import route_optimization_agent
 from app.state import AgentState
 from app.synthesis_agent import synthesizing_agent
 from app.weather_agent import weather_safety_agent
+from pfz_heuristics import generate_mock_pfz
 
 AGENT_NODES = ("ocean", "weather", "geofence", "route", "reporting")
+
+DEMO_QUERIES = {
+    "where fish": {
+        "intent": "PFZ",
+        "answer": "Potential Fishing Zone found east of the Odisha coast.",
+        "geojson": generate_mock_pfz(),
+        "visual_trace": {
+            "nodes": [{"id": "query", "label": "where fish", "type": "input"}, {"id": "pfz", "label": "Cached PFZ", "type": "database_record"}],
+            "edges": [{"source": "query", "target": "pfz", "label": "instant lookup"}],
+        },
+    },
+    "boundary warning": {
+        "intent": "Regulation",
+        "answer": "Boundary warning: seasonal protected-area restriction is active.",
+        "visual_trace": {
+            "nodes": [{"id": "query", "label": "boundary warning", "type": "input"}, {"id": "geofence", "label": "Protected boundary alert", "type": "database_record"}],
+            "edges": [{"source": "query", "target": "geofence", "label": "instant lookup"}],
+        },
+    },
+    "why low catch": {
+        "intent": "Trend",
+        "answer": "Low catch is likely from weak chlorophyll and sea-surface temperature conditions outside the PFZ.",
+        "visual_trace": {
+            "nodes": [{"id": "query", "label": "why low catch", "type": "input"}, {"id": "ocean", "label": "Cached ocean conditions", "type": "database_record"}],
+            "edges": [{"source": "query", "target": "ocean", "label": "instant lookup"}],
+        },
+    },
+}
+
+
+def demo_query(query: str) -> dict | None:
+    """Return a zero-lag pitch response for one of the three exact demo prompts."""
+    return DEMO_QUERIES.get(query)
 
 
 def route_sub_tasks(state: AgentState) -> list[str]:
@@ -59,4 +93,4 @@ def build_graph():
 
 graph = build_graph()
 
-__all__ = ["AGENT_NODES", "build_graph", "graph", "route_sub_tasks"]
+__all__ = ["AGENT_NODES", "DEMO_QUERIES", "build_graph", "demo_query", "graph", "route_sub_tasks"]

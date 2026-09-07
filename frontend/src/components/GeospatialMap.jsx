@@ -11,6 +11,6 @@ const LeafletMapInner = dynamic(() => import("./LeafletMapInner"), {
   ),
 });
 
-export default function GeospatialMap({ pfz, alerts = [] }) {
-  return <LeafletMapInner pfz={pfz} alerts={alerts} />;
+export default function GeospatialMap({ pfz, alerts = [], mapState, onMapChange }) {
+  return <LeafletMapInner pfz={pfz} alerts={alerts} mapState={mapState} onMapChange={onMapChange} />;
 }

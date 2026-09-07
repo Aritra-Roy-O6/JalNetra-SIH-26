@@ -1,5 +1,24 @@
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const withPWA = require("next-pwa")({
+  dest: "public",
+  disable: process.env.NODE_ENV === "development",
+  runtimeCaching: [
+    {
+      urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*/i,
+      handler: "CacheFirst",
+      options: {
+        cacheName: "leaflet-tiles",
+        expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
+      },
+    },
+  ],
+});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  turbopack: {},
   /* config options here */
   reactCompiler: true,
   async rewrites() {
@@ -12,4 +31,4 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+export default withPWA(nextConfig);
