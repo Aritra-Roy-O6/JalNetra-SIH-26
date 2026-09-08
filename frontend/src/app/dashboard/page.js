@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import GeospatialMap from "@/components/GeospatialMap";
 import ReasoningTracePanel from "@/components/ReasoningTracePanel";
 import VoiceInterface from "@/components/VoiceInterface";
 import { ApiError, fetchAlerts, fetchPFZ, postQuery, synthesizeSpeech } from "@/lib/api";
-import { clearChatHistory, loadLastChatMessage, loadMapState, loadRecentChatMessages, saveChatMessage, saveMapState } from "@/lib/db";
+import { clearChatHistory, loadLastChatMessage, loadMapState, loadOfflineSnapshot, loadRecentChatMessages, saveCachedData, saveChatMessage, saveMapState } from "@/lib/db";
 import { LOCALES, message, setAppLocale } from "@/lib/i18n";
+import { useResolvedLocation } from "@/lib/location-context";
 import { Languages, Settings, Trash2 } from "lucide-react";
 
 const QUICK_QUERIES = [
@@ -15,6 +16,12 @@ const QUICK_QUERIES = [
   ["What should I check before going to sea?", "Safety check"],
 ];
 const DEFAULT_MAP_STATE = { center: [20.25, 88.45], zoom: 5 };
+
+function formatAge(timestamp) {
+  const hours = Math.max(0, Math.round((Date.now() - timestamp) / 3600000));
+  if (hours < 1) return "less than 1 hour ago";
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
 
 function Icon({ name, size = 18 }) {
   if (name === "settings") return <Settings aria-hidden="true" size={size} strokeWidth={1.8} />;
@@ -30,7 +37,7 @@ function Icon({ name, size = 18 }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
 
-function SpeakerButton({ text, language }) {
+function SpeakerButton({ text, language, disabled }) {
   const [playing, setPlaying] = useState(false);
   async function replay() {
     setPlaying(true);
@@ -42,7 +49,7 @@ function SpeakerButton({ text, language }) {
     } catch { setPlaying(false); }
   }
 
-  return <button type="button" onClick={replay} disabled={playing} className="icon-button text-slate-400 hover:text-cyan-700" aria-label="Listen to this reply" title="Listen to reply"><Icon name="volume" size={16} /></button>;
+  return <button type="button" onClick={replay} disabled={playing || disabled} className="icon-button text-slate-400 hover:text-cyan-700" aria-label="Listen to this reply" title={disabled ? "Needs internet to play audio" : "Listen to reply"}><Icon name="volume" size={16} /></button>;
 }
 
 export default function DashboardPage() {
@@ -63,15 +70,55 @@ export default function DashboardPage() {
   const [voiceLanguage, setVoiceLanguage] = useState("hi-IN");
   const [appLanguage, setAppLanguage] = useState("en-IN");
   const [showSettings, setShowSettings] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [cachedAt, setCachedAt] = useState(null);
+  const [showOffline, setShowOffline] = useState(false);
+  const [offlineExpanded, setOfflineExpanded] = useState(false);
+  const { location, status: locationStatus, error: locationError, regions, chooseManual, changeLocation } = useResolvedLocation();
+
+  const loadCachedMarineData = useCallback(async () => {
+    const snapshot = await loadOfflineSnapshot();
+    if (snapshot.pfz?.data) setPfz(snapshot.pfz.data);
+    if (snapshot.alerts?.data) setAlerts(snapshot.alerts.data);
+    const timestamps = [snapshot.pfz?.savedAt, snapshot.alerts?.savedAt].filter(Boolean);
+    if (timestamps.length) setCachedAt(Math.max(...timestamps));
+  }, []);
+
+  const syncMarineData = useCallback(async () => {
+    try {
+      const [pfzData, alertData] = await Promise.all([
+        fetchPFZ({ latitude: DEFAULT_MAP_STATE.center[0], longitude: DEFAULT_MAP_STATE.center[1] }),
+        fetchAlerts(),
+      ]);
+      await Promise.all([saveCachedData("pfz", pfzData), saveCachedData("alerts", alertData)]);
+      setPfz(pfzData);
+      setAlerts(alertData);
+      setCachedAt(Date.now());
+      setIsOffline(false);
+      setStatus("Live");
+      return true;
+    } catch (error) {
+      setIsOffline(true);
+      await loadCachedMarineData();
+      setStatus("Offline — showing cached marine data");
+      setLogs((current) => [...current, { level: "error", stage: "offline", message: error.message }]);
+      return false;
+    }
+  }, [loadCachedMarineData]);
 
   useEffect(() => {
-    Promise.all([fetchPFZ({ latitude: DEFAULT_MAP_STATE.center[0], longitude: DEFAULT_MAP_STATE.center[1] }), fetchAlerts()])
-      .then(([pfzData, alertData]) => { setPfz(pfzData); setAlerts(alertData); })
-      .catch((error) => {
-        setStatus("Map data is unavailable");
-        setLogs((current) => [...current, { level: "error", stage: "startup", message: error.message }]);
-      });
-  }, []);
+    setIsOffline(!navigator.onLine);
+    syncMarineData();
+    const handleOnline = () => syncMarineData();
+    const handleOffline = () => { setIsOffline(true); setStatus("Offline — showing cached marine data"); };
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => { window.removeEventListener("online", handleOnline); window.removeEventListener("offline", handleOffline); };
+  }, [syncMarineData]);
+
+  useEffect(() => {
+    if (location) setMapState((current) => ({ ...current, center: [location.lat, location.lon], zoom: Math.max(current.zoom, 8) }));
+  }, [location]);
 
   useEffect(() => {
     Promise.all([loadMapState(), loadLastChatMessage(), loadRecentChatMessages()]).then(([savedMap, savedChat, savedHistory]) => {
@@ -89,6 +136,18 @@ export default function DashboardPage() {
     setMessages((current) => [...current, { role: "user", text: submittedQuery }]);
     setLoading(true);
     setStatus("Thinking");
+    if (isOffline || !navigator.onLine) {
+      const age = cachedAt ? ` (${formatAge(cachedAt)})` : "";
+      const zoneCount = pfz?.features?.length || 0;
+      const alertSummary = alerts.length ? `${alerts.length} active alert${alerts.length === 1 ? "" : "s"}` : "no active alerts";
+      const answer = `Can't reach live data right now. Last known conditions${age}: ${zoneCount} potential fishing zone${zoneCount === 1 ? "" : "s"} near ${mapState.center[0].toFixed(2)}, ${mapState.center[1].toFixed(2)}, ${alertSummary}.`;
+      setMessages((current) => [...current, { role: "assistant", text: answer }]);
+      await saveChatMessage(submittedQuery, answer);
+      setHistory(await loadRecentChatMessages());
+      setStatus("Offline — showing cached marine data");
+      setLoading(false);
+      return;
+    }
     try {
       const recentUserTexts = messages.filter((item) => item.role === "user").slice(-3).map((item) => item.text);
       const contextPrompt = recentUserTexts.length ? `${recentUserTexts.join("\n")}\n${submittedQuery}` : submittedQuery;
@@ -142,37 +201,41 @@ export default function DashboardPage() {
 
   return (
     <main className="app-shell">
+      {isOffline && <div className="offline-banner" role="status">Offline — showing data from {cachedAt ? formatAge(cachedAt) : "the last successful sync"}</div>}
       <header className="app-header">
         <div className="brand-lockup"><div className="brand-mark"><span className="brand-dot" />JalNetra</div><h1>your marine assistant</h1></div>
-        <div className="header-status" role="status"><span className={loading ? "status-dot is-live" : "status-dot"} />{status}</div>
         <div className="header-language"><Languages size={15} /><select aria-label="App language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
         <button type="button" className="settings-button" onClick={() => setShowSettings(true)} aria-label={message(appLanguage, "settings")} title={message(appLanguage, "settings")}><Icon name="settings" size={17} /></button>
-        <button type="button" className="mobile-map-toggle" onClick={() => setShowMap((current) => !current)} aria-label={showMap ? "Show chat" : "Show map"}><Icon name={showMap ? "chat" : "map"} size={17} />{showMap ? "Chat" : "Map"}</button>
+        <div className="mobile-view-tabs"><button type="button" className={!showMap && !showOffline ? "is-active" : ""} onClick={() => { setShowMap(false); setShowOffline(false); }}>Chat</button><button type="button" className={showMap ? "is-active" : ""} onClick={() => { setShowMap(true); setShowOffline(false); }}><Icon name="map" size={15} />Map</button><button type="button" className={showOffline ? "is-active" : ""} onClick={() => { setShowMap(false); setShowOffline(true); }}>Offline</button></div>
       </header>
 
       <section className="workspace">
-        <aside className={`chat-column ${showMap ? "mobile-hidden" : ""}`}>
-          <div className="reasoning-drawer">
+        <aside className={`chat-column ${showMap || showOffline ? "mobile-hidden" : ""}`}>
+          {locationStatus === "manual" && <div className="location-picker"><strong>Choose your coastal region</strong>{locationError && <p>{locationError}</p>}<button type="button" className="location-detect-button" onClick={changeLocation}>Use my current location</button><select defaultValue="" onChange={(event) => { const region = regions.find((item) => item.name === event.target.value); if (region) chooseManual(region); }}><option value="" disabled>Select a region or port</option>{regions.map((region) => <option key={region.name} value={region.name}>{region.name}</option>)}</select></div>}
+          <div className="desktop-utility-row">
+            <div className="reasoning-drawer">
             <button type="button" className="reasoning-trigger" onClick={() => setShowReasoning((current) => !current)} aria-expanded={showReasoning}>
               <span className="trigger-icon"><Icon name="arrow" size={15} /></span>
               <span><strong>{message(appLanguage, "agentReasoning")}</strong><small>{logs.length ? `${logs.length} ${message(appLanguage, "events")}` : ""}</small></span>
               <span className="drawer-chevron">{showReasoning ? "−" : "+"}</span>
             </button>
             {showReasoning && <div className="reasoning-content"><ReasoningTracePanel trace={trace} logs={logs} /></div>}
+            </div>
+            <div className="offline-column"><div className="offline-panel"><button type="button" className="offline-panel-trigger" onClick={() => setOfflineExpanded((current) => !current)} aria-expanded={offlineExpanded}><strong>{message(appLanguage, "offlineData")}</strong><span aria-hidden="true">{offlineExpanded ? "−" : "+"}</span></button>{offlineExpanded && <div className="offline-panel-content"><p>{message(appLanguage, isOffline ? "offlinePaused" : "offlineStored")}</p><div className="offline-stat"><strong>{cachedAt ? formatAge(cachedAt) : "No snapshot yet"}</strong><span>{message(appLanguage, "lastSync")}</span></div><div className="offline-stat"><strong>{pfz?.features?.length || 0}</strong><span>{message(appLanguage, "cachedZones")}</span></div><div className="offline-stat"><strong>{alerts.length}</strong><span>{message(appLanguage, "cachedAlerts")}</span></div><p className="offline-note">{message(appLanguage, "offlineLimit")}</p></div>}</div></div>
           </div>
 
           <div className="chat-heading"><div className="chat-heading-copy"><p className="eyebrow">{message(appLanguage, "marineAssistant")}</p></div><button type="button" className="clear-chat-button desktop-clear-chat-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></div>
 
           <div className="messages" aria-live="polite">
             {!messages.length && <div className="welcome-block"><div className="welcome-icon"><Icon name="spark" size={25} /></div><p>{message(appLanguage, "prompt")}</p><div className="suggestion-grid">{QUICK_QUERIES.map(([text, label]) => <button key={text} type="button" disabled={loading} onClick={() => submitQuery(text)}><span>{label}</span><Icon name="arrow" size={14} /></button>)}</div></div>}
-            {messages.map((item, index) => <div key={`${item.role}-${index}`} className={`message-row ${item.role}`}><div className="message-bubble">{item.role === "assistant" && <span className="message-label">JalNetra</span>}<p>{item.text}</p>{item.role === "assistant" && <SpeakerButton text={item.text} language={language} />}</div></div>)}
+            {messages.map((item, index) => <div key={`${item.role}-${index}`} className={`message-row ${item.role}`}><div className="message-bubble">{item.role === "assistant" && <span className="message-label">JalNetra</span>}<p>{item.text}</p>{item.role === "assistant" && <SpeakerButton text={item.text} language={language} disabled={isOffline} />}</div></div>)}
             {loading && <div className="message-row assistant"><div className="message-bubble thinking-bubble"><span className="message-label">JalNetra</span><div className="thinking"><span /><span /><span /></div></div></div>}
           </div>
 
           <div className="composer-wrap">
             <form className="composer" onSubmit={(event) => { event.preventDefault(); submitQuery(query); }}>
               <textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ask a marine question..." rows={1} disabled={loading} aria-label="Your question" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitQuery(query); } }} />
-              <VoiceInterface disabled={loading} language={voiceLanguage} onStatus={(statusMessage) => { setStatus(statusMessage); if (/transcribing/i.test(statusMessage)) setLoading(true); if (/voice answer ready|text answer ready|voice processing unavailable/i.test(statusMessage)) setLoading(false); if (/unavailable|error|failed|quota|configured/i.test(statusMessage)) setLogs((current) => [...current, { level: "error", stage: "voice", message: statusMessage }]); }} onResult={handleVoiceResult} />
+              <VoiceInterface disabled={loading || isOffline} language={voiceLanguage} onStatus={(statusMessage) => { setStatus(statusMessage); if (/transcribing/i.test(statusMessage)) setLoading(true); if (/voice answer ready|text answer ready|voice processing unavailable/i.test(statusMessage)) setLoading(false); if (/unavailable|error|failed|quota|configured/i.test(statusMessage)) setLogs((current) => [...current, { level: "error", stage: "voice", message: statusMessage }]); }} onResult={handleVoiceResult} />
               <button type="submit" className="send-button" disabled={loading || !query.trim()} aria-label="Send question" title="Send question"><Icon name="send" size={18} /></button>
             </form>
             <div className="composer-meta"><label htmlFor="query-language">{message(appLanguage, "replyIn")}</label><select id="query-language" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={loading}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
@@ -181,11 +244,12 @@ export default function DashboardPage() {
 
         <section className={`map-column ${!showMap ? "mobile-hidden" : ""}`}>
           <div className="map-heading"><div><p className="eyebrow">Live view</p><h2>{message(appLanguage, "marineMap")}</h2></div><span className="layer-summary">{layerSummary}</span></div>
-          <div className="map-frame"><GeospatialMap pfz={pfz} alerts={alerts} mapState={mapState} onMapChange={(nextMapState) => { setMapState(nextMapState); saveMapState(nextMapState); }} /></div>
-          <div className="map-footer"><span><i className="legend-dot zone" />Potential fishing zones</span><span><i className="legend-dot boundary" />Operating boundary</span></div>
+          <div className={`map-frame ${isOffline ? "is-cached" : ""}`}><GeospatialMap pfz={pfz} alerts={alerts} mapState={mapState} cached={isOffline} currentLocation={location ? { latitude: location.lat, longitude: location.lon, accuracy: 1000 } : null} onMapChange={(nextMapState) => { setMapState(nextMapState); saveMapState(nextMapState); }} /></div>
+          <div className="map-footer"><span><i className="legend-dot zone" />Potential fishing zones</span><span><i className="legend-dot boundary" />Operating boundary</span><span><i className="legend-dot location" />{location ? `Resolved ${location.source} location` : locationStatus}</span>{cachedAt && <span>PFZ as of {new Date(cachedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}</div>
         </section>
+        <section className={`mobile-offline-column ${!showOffline ? "mobile-hidden" : ""}`}><div className="offline-panel"><button type="button" className="offline-panel-trigger" onClick={() => setOfflineExpanded((current) => !current)} aria-expanded={offlineExpanded}><strong>{message(appLanguage, "offlineData")}</strong><span aria-hidden="true">{offlineExpanded || showOffline ? "−" : "+"}</span></button>{(offlineExpanded || showOffline) && <div className="offline-panel-content"><p>{message(appLanguage, isOffline ? "offlinePaused" : "offlineStored")}</p><div className="offline-stat"><strong>{cachedAt ? formatAge(cachedAt) : "No snapshot yet"}</strong><span>{message(appLanguage, "lastSync")}</span></div><div className="offline-stat"><strong>{pfz?.features?.length || 0}</strong><span>{message(appLanguage, "cachedZones")}</span></div><div className="offline-stat"><strong>{alerts.length}</strong><span>{message(appLanguage, "cachedAlerts")}</span></div><p className="offline-note">{message(appLanguage, "offlineLimit")}</p></div>}</div></section>
       </section>
-      {showSettings && <div className="settings-backdrop" role="presentation" onClick={() => setShowSettings(false)}><section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-title"><h2 id="settings-title">{message(appLanguage, "settings")}</h2><button type="button" onClick={() => setShowSettings(false)} aria-label={message(appLanguage, "close")}>×</button></div><label htmlFor="app-language">{message(appLanguage, "appLanguage")}</label><select id="app-language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label htmlFor="voice-language">{message(appLanguage, "inputLanguage")}</label><select id="voice-language" value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><button type="button" className="clear-chat-button settings-clear-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></section></div>}
+      {showSettings && <div className="settings-backdrop" role="presentation" onClick={() => setShowSettings(false)}><section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-title"><h2 id="settings-title">{message(appLanguage, "settings")}</h2><button type="button" onClick={() => setShowSettings(false)} aria-label={message(appLanguage, "close")}>×</button></div><label htmlFor="app-language">{message(appLanguage, "appLanguage")}</label><select id="app-language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label htmlFor="voice-language">{message(appLanguage, "inputLanguage")}</label><select id="voice-language" value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select>{location && <button type="button" className="location-change-button" onClick={changeLocation}>Change location</button>}<button type="button" className="clear-chat-button settings-clear-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></section></div>}
     </main>
   );
 }

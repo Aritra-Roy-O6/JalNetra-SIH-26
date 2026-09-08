@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useMap, useMapEvents } from "react-leaflet";
-import { GeoJSON, MapContainer, TileLayer } from "react-leaflet";
+import { Circle, CircleMarker, GeoJSON, MapContainer, TileLayer, Tooltip } from "react-leaflet";
 
 const ALERT_ZONES = {
   cyclone: polygonFeature("Cyclone watch", "weather_alert", [
@@ -56,15 +56,16 @@ function alertCollection(alerts) {
   };
 }
 
-function styleFeature(feature) {
+function styleFeature(feature, cached) {
   const zoneType = feature?.properties?.zone_type;
+  const cachedStyle = cached ? { opacity: 0.68, fillOpacity: 0.18, weight: 2, dashArray: "7 5" } : {};
   if (zoneType === "potential_fishing_zone") {
-    return { color: "#15803d", fillColor: "#22c55e", fillOpacity: 0.28, weight: 2 };
+    return { color: "#15803d", fillColor: "#22c55e", fillOpacity: 0.28, weight: 2, ...cachedStyle };
   }
   if (zoneType === "weather_alert") {
-    return { color: "#b45309", fillColor: "#f59e0b", fillOpacity: 0.22, weight: 2 };
+    return { color: "#b45309", fillColor: "#f59e0b", fillOpacity: 0.22, weight: 2, ...cachedStyle };
   }
-  return { color: "#1d4ed8", fillColor: "#60a5fa", fillOpacity: 0.12, weight: 2, dashArray: "6 4" };
+  return { color: "#1d4ed8", fillColor: "#60a5fa", fillOpacity: 0.12, weight: 2, dashArray: "6 4", ...cachedStyle };
 }
 
 function bindPopup(feature, layer) {
@@ -112,7 +113,49 @@ function MapSizeObserver() {
   return null;
 }
 
-export default function LeafletMapInner({ pfz, alerts, mapState, onMapChange }) {
+function CurrentLocationMarker({ location }) {
+  const map = useMap();
+  const centeredRef = useRef(false);
+
+  useEffect(() => {
+    if (!location || centeredRef.current) return;
+    centeredRef.current = true;
+    map.setView([location.latitude, location.longitude], Math.max(map.getZoom(), 8), { animate: false });
+  }, [location, map]);
+
+  if (!location) return null;
+  const center = [location.latitude, location.longitude];
+  return <><Circle center={center} radius={location.accuracy} pathOptions={{ color: "#0e7490", fillColor: "#67e8f9", fillOpacity: 0.12, weight: 1, dashArray: "4 4" }} /><CircleMarker center={center} radius={8} pathOptions={{ color: "#fff", fillColor: "#0e7490", fillOpacity: 1, weight: 3 }}><Tooltip permanent direction="top" offset={[0, -8]}>Current location</Tooltip></CircleMarker></>;
+}
+
+function prefetchTiles(center, zoom) {
+  const scale = 2 ** zoom;
+  const x = Math.floor(((center[1] + 180) / 360) * scale);
+  const y = Math.floor(((1 - Math.asinh(Math.tan((center[0] * Math.PI) / 180)) / Math.PI) / 2) * scale);
+  const urls = [];
+  for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      const tileX = (x + offsetX + scale) % scale;
+      const tileY = Math.max(0, Math.min(scale - 1, y + offsetY));
+      urls.push(`https://${["a", "b", "c"][urls.length % 3]}.tile.openstreetmap.org/${zoom}/${tileX}/${tileY}.png`);
+    }
+  }
+  urls.forEach((url) => fetch(url).catch(() => null));
+}
+
+function MapTilePrefetcher({ mapState, cached }) {
+  const prefetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (cached || prefetchedRef.current || !mapState) return;
+    prefetchedRef.current = true;
+    prefetchTiles(mapState.center, mapState.zoom);
+  }, [cached, mapState]);
+
+  return null;
+}
+
+export default function LeafletMapInner({ pfz, alerts, mapState, cached, currentLocation, onMapChange }) {
   const activeAlerts = alertCollection(alerts);
 
   return (
@@ -132,13 +175,15 @@ export default function LeafletMapInner({ pfz, alerts, mapState, onMapChange }) 
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <MapSizeObserver />
+      <MapTilePrefetcher mapState={mapState} cached={cached} />
+      <CurrentLocationMarker location={currentLocation} />
       <MapStateRestorer mapState={mapState} />
       <MapStateSaver onMapChange={onMapChange} />
       {pfz?.features?.length ? (
-        <GeoJSON data={pfz} style={styleFeature} onEachFeature={bindPopup} />
+        <GeoJSON data={pfz} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
       ) : null}
-      <GeoJSON data={activeAlerts} style={styleFeature} onEachFeature={bindPopup} />
-      <GeoJSON data={RESTRICTED_BOUNDARIES} style={styleFeature} onEachFeature={bindPopup} />
+      <GeoJSON data={activeAlerts} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
+      <GeoJSON data={RESTRICTED_BOUNDARIES} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
     </MapContainer>
   );
 }

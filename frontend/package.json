@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ducanh2912/next-pwa": "^10.2.9",
+    "@turf/helpers": "^7.4.0",
+    "@turf/nearest-point-on-line": "^7.4.0",
     "@xyflow/react": "^12.11.6",
     "dexie": "^4.4.5",
     "i18next": "^26.4.2",
@@ -16,7 +19,6 @@
     "lucide-react": "^1.42.0",
     "mapbox-gl": "^3.29.0",
     "next": "16.3.4",
-    "next-pwa": "^2.0.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-leaflet": "^5.0.0",
