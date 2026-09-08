@@ -15,11 +15,8 @@ export default function ReasoningTracePanel({ trace, logs = [] }) {
   }));
 
   return (
-    <details className="border border-slate-200 bg-white" open={entries.length > 0}>
-      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-semibold text-slate-800">
-        <span className="mr-2 text-blue-700">▸</span>Execution log ({entries.length})
-      </summary>
-      <div className="max-h-64 space-y-2 overflow-y-auto border-t border-slate-200 p-3">
+    <div className="trace-list">
+      <div className="max-h-64 space-y-2 overflow-y-auto">
         {!entries.length && <p className="text-sm text-slate-500">Submit a query to view the agent log.</p>}
         {entries.map((entry, index) => (
           <div key={entry.stage + "-" + index} className={(LEVEL_CLASS[entry.level] || LEVEL_CLASS.info) + " rounded border px-3 py-2 text-xs"}>
@@ -30,6 +27,6 @@ export default function ReasoningTracePanel({ trace, logs = [] }) {
           </div>
         ))}
       </div>
-    </details>
+    </div>
   );
 }

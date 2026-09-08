@@ -28,15 +28,19 @@ type VoiceResult = {
 
 type VoiceInterfaceProps = {
   disabled?: boolean;
+  language: string;
   onResult: (result: VoiceResult) => void;
   onStatus: (status: string) => void;
 };
 
-export default function VoiceInterface({ disabled = false, onResult, onStatus }: VoiceInterfaceProps) {
+function MicIcon({ recording }: { recording: boolean }) {
+  return <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8" />{recording && <circle cx="12" cy="8" r="1" fill="currentColor" stroke="none" />}</svg>;
+}
+
+export default function VoiceInterface({ disabled = false, language, onResult, onStatus }: VoiceInterfaceProps) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [language, setLanguage] = useState("hi-IN");
   const [recording, setRecording] = useState(false);
   const [error, setError] = useState("");
 
@@ -103,16 +107,10 @@ export default function VoiceInterface({ disabled = false, onResult, onStatus }:
   }
 
   return (
-    <div className="space-y-2">
-      <label className="block text-sm font-medium text-slate-700" htmlFor="voice-language">Voice language</label>
-      <select id="voice-language" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={recording || disabled} className="w-full border border-slate-300 px-3 py-2 text-sm">
-        {VOICE_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-      </select>
-      <button type="button" onClick={recording ? stopRecording : startRecording} disabled={disabled} className="w-full border border-blue-800 px-4 py-2 text-sm font-semibold text-blue-800 disabled:border-slate-300 disabled:text-slate-400">
-        {recording ? "Stop recording" : "Hold a voice conversation"}
-      </button>
-      {recording && <p className="text-xs text-red-700">Recording — automatically stops after 29 seconds.</p>}
-      {error && <p role="status" className="text-xs text-red-700">{error}</p>}
+    <div className="voice-control">
+      <button type="button" onClick={recording ? stopRecording : startRecording} disabled={disabled} className={`mic-button ${recording ? "is-recording" : ""}`} aria-label={recording ? "Stop recording" : "Record a voice question"} title={recording ? "Stop recording" : "Speak your question"}><MicIcon recording={recording} /></button>
+      {recording && <span className="recording-pulse" aria-label="Recording" />}
+      {error && <span role="status" className="voice-error">{error}</span>}
     </div>
   );
 }

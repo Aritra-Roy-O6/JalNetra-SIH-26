@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import requests
 from dotenv import load_dotenv
+import certifi
 
 try:
     import truststore
@@ -26,6 +27,10 @@ else:
     truststore.inject_into_ssl()
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+# Copernicus' boto3 S3 client does not pass a CA bundle explicitly. Providing
+# the standard bundle keeps its CloudFerro downloads certificate-verified.
+os.environ.setdefault("AWS_CA_BUNDLE", certifi.where())
 
 SEA_LEVEL_DATASET = "cmems_mod_glo_phy_anfc_0.083deg_P1D-m"
 TEMPERATURE_DATASET = "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m"

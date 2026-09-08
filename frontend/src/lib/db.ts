@@ -34,3 +34,7 @@ export async function loadLastChatMessage() {
 export async function loadRecentChatMessages() {
   return db.chatHistory.orderBy("createdAt").reverse().limit(3).toArray();
 }
+
+export async function clearChatHistory() {
+  await db.chatHistory.clear();
+}

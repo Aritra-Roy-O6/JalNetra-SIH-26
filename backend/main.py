@@ -4,9 +4,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.agents.orchestrator import graph
 from app.language import normalize_language
-from app.pfz_model import MODEL_FEATURES, current_pfz_prediction, load_pfz_model
+from app.services.gemini_service import GeminiServiceError, answer_query, translate_from_english, translate_to_english
 from services.sarvam_service import SarvamServiceError, speech_to_text, text_to_speech
 
 
@@ -18,9 +17,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-PFZ_MODEL = load_pfz_model()
-
-
 class QueryRequest(BaseModel):
     """Natural-language query submitted to the prototype assistant."""
 
@@ -32,11 +28,15 @@ class QueryRequest(BaseModel):
     distance_to_coast_km: float | None = None
 
 
+class SpeechRequest(BaseModel):
+    text: str
+    language: str = "en-IN"
+
+
 @app.get("/api/v1/pfz")
 def get_pfz(latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
-    """Return a model-backed PFZ prediction and feature provenance."""
-    prediction = current_pfz_prediction(latitude, longitude, distance_to_coast_km, PFZ_MODEL)
-    return {"model_features": MODEL_FEATURES, "prediction": prediction}
+    """Keep the map contract while PFZ model work is intentionally paused."""
+    return {"model_features": [], "prediction": None, "features": []}
 
 
 @app.get("/api/v1/alerts")
@@ -46,26 +46,44 @@ def get_alerts() -> list[dict]:
 
 
 def run_query(query: str, language: str = "en-IN", latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
-    """Run the LangGraph workflow and return its structured response."""
+    """Translate and answer with Gemini without invoking data or prediction models."""
     requested_language = normalize_language(language)
-    location = None if latitude is None or longitude is None else {"latitude": latitude, "longitude": longitude, "distance_to_coast_km": distance_to_coast_km}
-    result = graph.invoke({"query": query, "original_query": query, "requested_language": requested_language, "location": location})
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+
+    translated_query = translate_to_english(query, requested_language)
+    english_answer = answer_query(translated_query)
+    answer = translate_from_english(english_answer, requested_language)
+    intent = "Marine information"
     return {
         "query": query,
-        "original_query": result.get("original_query", query),
-        "translated_query": result.get("translated_query", query),
-        "language": result.get("requested_language", requested_language),
-        "intent": result["intent"],
-        "answer": result["response"],
-        "visual_trace": result["visual_trace"],
-        "geojson": result.get("geojson"),
-        "execution_log": result.get("execution_log", []),
+        "original_query": query,
+        "translated_query": translated_query,
+        "language": requested_language,
+        "intent": intent,
+        "answer": answer,
+        "visual_trace": {"nodes": [{"id": "input", "label": query, "type": "input"}, {"id": "response", "label": "Gemini response", "type": "service"}], "edges": [{"source": "input", "target": "response", "label": "translated and answered"}]},
+        "geojson": None,
+        "execution_log": [{"level": "success", "stage": "response", "message": "Answered with Gemini; data and prediction models are paused."}],
     }
 
 
 @app.post("/api/v1/query")
 def submit_query(request: QueryRequest) -> dict:
-    return run_query(request.query, request.language, request.latitude, request.longitude, request.distance_to_coast_km)
+    try:
+        return run_query(request.query, request.language, request.latitude, request.longitude, request.distance_to_coast_km)
+    except GeminiServiceError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/api/v1/speech")
+def synthesize_speech(request: SpeechRequest) -> dict:
+    """Synthesize any displayed answer with Sarvam for replay controls."""
+    try:
+        audio_base64 = text_to_speech(request.text, normalize_language(request.language))
+    except SarvamServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    return {"audio_base64": audio_base64, "audio_mime_type": "audio/wav"}
 
 
 @app.post("/api/v1/voice-query")
@@ -73,7 +91,7 @@ def submit_voice_query(
     audio: UploadFile = File(...),
     language: str = Form("hi-IN"),
 ) -> dict:
-    """Transcribe audio, run ORCA, then return a spoken answer when available."""
+    """Transcribe regional speech, answer in the selected language, and synthesize it."""
     if not audio.content_type or not audio.content_type.startswith("audio/"):
         raise HTTPException(status_code=415, detail="Upload an audio file (WebM, WAV, or MP3).")
 
@@ -87,7 +105,10 @@ def submit_voice_query(
     except SarvamServiceError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
-    query_result = run_query(transcribed_text, language)
+    try:
+        query_result = run_query(transcribed_text, language)
+    except GeminiServiceError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     audio_base64 = None
     voice_error = None
     try:

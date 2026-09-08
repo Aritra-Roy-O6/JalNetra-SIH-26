@@ -1,43 +1,74 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import GeospatialMap from "@/components/GeospatialMap";
 import ReasoningTracePanel from "@/components/ReasoningTracePanel";
 import VoiceInterface from "@/components/VoiceInterface";
-import { ApiError, fetchAlerts, fetchPFZ, postQuery } from "@/lib/api";
-import { loadLastChatMessage, loadMapState, loadRecentChatMessages, saveChatMessage, saveMapState } from "@/lib/db";
+import { ApiError, fetchAlerts, fetchPFZ, postQuery, synthesizeSpeech } from "@/lib/api";
+import { clearChatHistory, loadLastChatMessage, loadMapState, loadRecentChatMessages, saveChatMessage, saveMapState } from "@/lib/db";
+import { LOCALES, message, setAppLocale } from "@/lib/i18n";
+import { Languages, Settings, Trash2 } from "lucide-react";
 
-const DEFAULT_QUERY = "Where is the nearest Potential Fishing Zone today?";
 const QUICK_QUERIES = [
-  ["where fish", "Find fishing zone"],
-  ["boundary warning", "Check boundary"],
-  ["why low catch", "Explain low catch"],
+  ["Where are the better fishing areas?", "Fishing areas"],
+  ["Are there any boundary warnings?", "Boundary check"],
+  ["What should I check before going to sea?", "Safety check"],
 ];
 const DEFAULT_MAP_STATE = { center: [20.25, 88.45], zoom: 5 };
+
+function Icon({ name, size = 18 }) {
+  if (name === "settings") return <Settings aria-hidden="true" size={size} strokeWidth={1.8} />;
+  if (name === "trash") return <Trash2 aria-hidden="true" size={size} strokeWidth={1.8} />;
+  const paths = {
+    arrow: <path d="M5 9l7 7 7-7M12 16V3" />,
+    map: <><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z" /><path d="M9 3v15M15 6v15" /></>,
+    chat: <><path d="M20 11.5a7 7 0 0 1-7.5 7 8.5 8.5 0 0 1-3.5-.8L4 19l1.4-3.7A7 7 0 1 1 20 11.5Z" /><path d="M8 11h.01M12 11h.01M16 11h.01" /></>,
+    send: <><path d="m21 3-7.5 18-3.2-7.3L3 10.5 21 3Z" /><path d="M10.3 13.7 21 3" /></>,
+    volume: <><path d="M4 10v4h4l5 4V6l-5 4H4Z" /><path d="M16 9.5a4 4 0 0 1 0 5M18.5 7a7.5 7.5 0 0 1 0 10" /></>,
+    spark: <><path d="m12 2 1.4 5.6L19 9l-5.6 1.4L12 16l-1.4-5.6L5 9l5.6-1.4L12 2Z" /><path d="m19 15 .6 2.4L22 18l-2.4.6L19 21l-.6-2.4L16 18l2.4-.6L19 15Z" /></>,
+  };
+  return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
+}
+
+function SpeakerButton({ text, language }) {
+  const [playing, setPlaying] = useState(false);
+  async function replay() {
+    setPlaying(true);
+    try {
+      const result = await synthesizeSpeech(text, language);
+      const audio = new Audio(`data:${result.audio_mime_type || "audio/wav"};base64,${result.audio_base64}`);
+      audio.onended = () => setPlaying(false);
+      await audio.play();
+    } catch { setPlaying(false); }
+  }
+
+  return <button type="button" onClick={replay} disabled={playing} className="icon-button text-slate-400 hover:text-cyan-700" aria-label="Listen to this reply" title="Listen to reply"><Icon name="volume" size={16} /></button>;
+}
 
 export default function DashboardPage() {
   const [pfz, setPfz] = useState(null);
   const [alerts, setAlerts] = useState([]);
-  const [query, setQuery] = useState(DEFAULT_QUERY);
-  const [answer, setAnswer] = useState("Ask a safety or PFZ question to inspect the evidence path.");
+  const [query, setQuery] = useState("");
+  const [messages, setMessages] = useState([]);
   const [trace, setTrace] = useState(null);
-  const [status, setStatus] = useState("Connecting to JalNetra API");
+  const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [mapState, setMapState] = useState(DEFAULT_MAP_STATE);
   const [history, setHistory] = useState([]);
   const [intent, setIntent] = useState(null);
   const [language, setLanguage] = useState("en-IN");
   const [logs, setLogs] = useState([]);
+  const [showMap, setShowMap] = useState(false);
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState("hi-IN");
+  const [appLanguage, setAppLanguage] = useState("en-IN");
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     Promise.all([fetchPFZ({ latitude: DEFAULT_MAP_STATE.center[0], longitude: DEFAULT_MAP_STATE.center[1] }), fetchAlerts()])
-      .then(([pfzData, alertData]) => {
-        setPfz(pfzData);
-        setAlerts(alertData);
-        setStatus("Live prototype data loaded");
-      })
+      .then(([pfzData, alertData]) => { setPfz(pfzData); setAlerts(alertData); })
       .catch((error) => {
-        setStatus(error.message);
+        setStatus("Map data is unavailable");
         setLogs((current) => [...current, { level: "error", stage: "startup", message: error.message }]);
       });
   }, []);
@@ -46,189 +77,115 @@ export default function DashboardPage() {
     Promise.all([loadMapState(), loadLastChatMessage(), loadRecentChatMessages()]).then(([savedMap, savedChat, savedHistory]) => {
       if (savedMap) setMapState({ center: savedMap.center, zoom: savedMap.zoom });
       setHistory(savedHistory);
-      if (savedChat) {
-        setQuery(savedChat.query);
-        setAnswer(savedChat.answer);
-      }
+      if (savedChat) setMessages([{ role: "user", text: savedChat.query }, { role: "assistant", text: savedChat.answer }]);
     });
   }, []);
+  const layerSummary = useMemo(() => `${pfz?.features?.length || 0} zones · ${alerts.length} alerts`, [pfz, alerts]);
 
   async function submitQuery(rawQuery) {
     const submittedQuery = rawQuery.trim();
-    if (!submittedQuery) {
-      return;
-    }
-
-    setQuery(submittedQuery);
+    if (!submittedQuery || loading) return;
+    setQuery("");
+    setMessages((current) => [...current, { role: "user", text: submittedQuery }]);
     setLoading(true);
-    setStatus("Checking marine evidence…");
+    setStatus("Thinking");
     try {
-      const result = await postQuery(submittedQuery, { language, latitude: mapState.center[0], longitude: mapState.center[1] });
-      setAnswer(result.answer || "No answer returned.");
+      const recentUserTexts = messages.filter((item) => item.role === "user").slice(-3).map((item) => item.text);
+      const contextPrompt = recentUserTexts.length ? `${recentUserTexts.join("\n")}\n${submittedQuery}` : submittedQuery;
+      const result = await postQuery(contextPrompt, { language, latitude: mapState.center[0], longitude: mapState.center[1] });
+      const answer = result.answer || "No answer returned.";
+      setMessages((current) => [...current, { role: "assistant", text: answer }]);
       setTrace(result.visual_trace);
       setLogs(result.execution_log || []);
-      if (result.geojson) setPfz(result.geojson);
-      await saveChatMessage(submittedQuery, result.answer || "No answer returned.");
-      setHistory(await loadRecentChatMessages());
-      setIntent(result.intent || "Marine query");
+      setIntent(result.intent || "Marine information");
       setLanguage(result.language || language);
-      setStatus(`Intent detected: ${result.intent || "Marine query"}`);
+      await saveChatMessage(submittedQuery, answer);
+      setHistory(await loadRecentChatMessages());
+      setStatus("");
     } catch (error) {
       const message = error instanceof ApiError ? error.message : "Query failed.";
-      setStatus(message);
+      setMessages((current) => [...current, { role: "error", text: message }]);
+      setStatus("Something went wrong");
       setLogs((current) => [...current, { level: "error", stage: "api", message }]);
     } finally {
       setLoading(false);
     }
   }
 
-  function handleSubmit(event) {
-    event.preventDefault();
-    submitQuery(query);
-  }
-
   async function handleVoiceResult(result) {
-    setQuery(result.transcribed_text);
-    setAnswer(result.answer);
+    setMessages((current) => [...current, { role: "user", text: result.transcribed_text }, { role: "assistant", text: result.answer }]);
     setTrace(result.visual_trace || null);
     setLogs(result.execution_log || []);
-    setIntent(result.intent || "Marine query");
+    setIntent(result.intent || "Marine information");
     setLanguage(result.language || language);
-    if (result.geojson) setPfz(result.geojson);
     await saveChatMessage(result.transcribed_text, result.answer);
     setHistory(await loadRecentChatMessages());
   }
 
+  async function clearChat() {
+    if (loading) return;
+    await clearChatHistory();
+    setMessages([]);
+    setQuery("");
+    setHistory([]);
+    setTrace(null);
+    setLogs([]);
+    setIntent(null);
+  }
+
+  function changeAppLanguage(nextLanguage) {
+    setAppLanguage(nextLanguage);
+    setLanguage(nextLanguage);
+    setVoiceLanguage(nextLanguage);
+    setAppLocale(nextLanguage);
+  }
+
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-950">
-      <header className="border-b-4 border-orange-500 bg-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-4 py-4 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-normal text-blue-800">
-              SIH 2026 - ISRO Problem 26176
-            </p>
-            <h1 className="text-2xl font-bold text-slate-950">JalNetra ORCA Dashboard</h1>
-            <p className="text-sm text-slate-600">
-              PFZ, marine alerts, geofences, and explainable agent reasoning for coastal operations.
-            </p>
-          </div>
-          <div role="status" className="border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
-            {status}
-          </div>
-        </div>
+    <main className="app-shell">
+      <header className="app-header">
+        <div className="brand-lockup"><div className="brand-mark"><span className="brand-dot" />JalNetra</div><h1>your marine assistant</h1></div>
+        <div className="header-status" role="status"><span className={loading ? "status-dot is-live" : "status-dot"} />{status}</div>
+        <div className="header-language"><Languages size={15} /><select aria-label="App language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
+        <button type="button" className="settings-button" onClick={() => setShowSettings(true)} aria-label={message(appLanguage, "settings")} title={message(appLanguage, "settings")}><Icon name="settings" size={17} /></button>
+        <button type="button" className="mobile-map-toggle" onClick={() => setShowMap((current) => !current)} aria-label={showMap ? "Show chat" : "Show map"}><Icon name={showMap ? "chat" : "map"} size={17} />{showMap ? "Chat" : "Map"}</button>
       </header>
 
-      <section className="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[360px_1fr]">
-        <aside className="space-y-4">
-          <section className="border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Marine Query</h2>
-            </div>
-            <form onSubmit={handleSubmit} className="space-y-3 p-4">
-              <VoiceInterface
-                disabled={loading}
-                onStatus={(message) => {
-                  setStatus(message);
-                  if (/unavailable|error|failed|quota|configured/i.test(message)) {
-                    setLogs((current) => [...current, { level: "error", stage: "voice", message }]);
-                  }
-                }}
-                onResult={handleVoiceResult}
-              />
-              <label className="block text-sm font-medium text-slate-700" htmlFor="query-language">Answer language</label>
-              <select id="query-language" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={loading} className="w-full border border-slate-300 px-3 py-2 text-sm">
-                <option value="en-IN">English</option><option value="hi-IN">हिन्दी (Hindi)</option><option value="ta-IN">தமிழ் (Tamil)</option><option value="te-IN">తెలుగు (Telugu)</option><option value="bn-IN">বাংলা (Bengali)</option><option value="od-IN">ଓଡ଼ିଆ (Odia)</option>
-              </select>
-              <label className="block text-sm font-medium text-slate-700" htmlFor="query">
-                Fisherman / authority question
-              </label>
-              <textarea
-                id="query"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                className="min-h-28 w-full border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-700"
-              />
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-800 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-400"
-              >
-                {loading ? "Processing" : "Ask ORCA"}
-              </button>
-              <div className="border-t border-slate-200 pt-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Instant demo checks</p>
-                <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
-                  {QUICK_QUERIES.map(([quickQuery, label]) => (
-                    <button key={quickQuery} type="button" disabled={loading} onClick={() => submitQuery(quickQuery)} className="border border-slate-300 px-2 py-2 text-left text-xs font-medium text-slate-700 hover:border-blue-700 hover:text-blue-800 disabled:text-slate-400">
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+      <section className="workspace">
+        <aside className={`chat-column ${showMap ? "mobile-hidden" : ""}`}>
+          <div className="reasoning-drawer">
+            <button type="button" className="reasoning-trigger" onClick={() => setShowReasoning((current) => !current)} aria-expanded={showReasoning}>
+              <span className="trigger-icon"><Icon name="arrow" size={15} /></span>
+              <span><strong>{message(appLanguage, "agentReasoning")}</strong><small>{logs.length ? `${logs.length} ${message(appLanguage, "events")}` : ""}</small></span>
+              <span className="drawer-chevron">{showReasoning ? "−" : "+"}</span>
+            </button>
+            {showReasoning && <div className="reasoning-content"><ReasoningTracePanel trace={trace} logs={logs} /></div>}
+          </div>
+
+          <div className="chat-heading"><div className="chat-heading-copy"><p className="eyebrow">{message(appLanguage, "marineAssistant")}</p></div><button type="button" className="clear-chat-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></div>
+
+          <div className="messages" aria-live="polite">
+            {!messages.length && <div className="welcome-block"><div className="welcome-icon"><Icon name="spark" size={25} /></div><p>{message(appLanguage, "prompt")}</p><div className="suggestion-grid">{QUICK_QUERIES.map(([text, label]) => <button key={text} type="button" disabled={loading} onClick={() => submitQuery(text)}><span>{label}</span><Icon name="arrow" size={14} /></button>)}</div></div>}
+            {messages.map((item, index) => <div key={`${item.role}-${index}`} className={`message-row ${item.role}`}><div className="message-bubble">{item.role === "assistant" && <span className="message-label">JalNetra</span>}<p>{item.text}</p>{item.role === "assistant" && <SpeakerButton text={item.text} language={language} />}</div></div>)}
+            {loading && <div className="message-row assistant"><div className="message-bubble thinking-bubble"><span className="message-label">JalNetra</span><div className="thinking"><span /><span /><span /></div></div></div>}
+          </div>
+
+          <div className="composer-wrap">
+            <form className="composer" onSubmit={(event) => { event.preventDefault(); submitQuery(query); }}>
+              <textarea value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ask a marine question..." rows={1} disabled={loading} aria-label="Your question" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submitQuery(query); } }} />
+              <VoiceInterface disabled={loading} language={voiceLanguage} onStatus={(statusMessage) => { setStatus(statusMessage); if (/transcribing/i.test(statusMessage)) setLoading(true); if (/voice answer ready|text answer ready|voice processing unavailable/i.test(statusMessage)) setLoading(false); if (/unavailable|error|failed|quota|configured/i.test(statusMessage)) setLogs((current) => [...current, { level: "error", stage: "voice", message: statusMessage }]); }} onResult={handleVoiceResult} />
+              <button type="submit" className="send-button" disabled={loading || !query.trim()} aria-label="Send question" title="Send question"><Icon name="send" size={18} /></button>
             </form>
-          </section>
-
-          <section className="border border-slate-300 bg-white">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Recommended action</h2>
-              {intent && <span className="bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-900">{intent}</span>}
-            </div>
-            <p className="p-4 text-sm leading-6 text-slate-700">{answer}</p>
-          </section>
-
-          {history.length > 0 && <section className="border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3"><h2 className="text-base font-semibold">Available offline</h2></div>
-            <div className="divide-y divide-slate-100">{history.map((item) => <button key={item.id} type="button" onClick={() => { setQuery(item.query); setAnswer(item.answer); }} className="w-full px-4 py-3 text-left text-sm hover:bg-slate-50"><span className="block font-medium text-slate-800">{item.query}</span><span className="block truncate text-xs text-slate-500">{item.answer}</span></button>)}</div>
-          </section>}
-
-          <section className="border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Active Layers</h2>
-            </div>
-            <dl className="grid grid-cols-3 gap-px bg-slate-200 text-center text-sm">
-              <div className="bg-white p-3">
-                <dt className="font-semibold text-green-700">PFZ</dt>
-                <dd>{pfz?.features?.length || 0}</dd>
-              </div>
-              <div className="bg-white p-3">
-                <dt className="font-semibold text-amber-700">Alerts</dt>
-                <dd>{alerts.length}</dd>
-              </div>
-              <div className="bg-white p-3">
-                <dt className="font-semibold text-blue-700">Bounds</dt>
-                <dd>1</dd>
-              </div>
-            </dl>
-          </section>
+            <div className="composer-meta"><label htmlFor="query-language">{message(appLanguage, "replyIn")}</label><select id="query-language" value={language} onChange={(event) => setLanguage(event.target.value)} disabled={loading}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
+          </div>
         </aside>
 
-        <section className="grid gap-4 xl:min-h-[760px] xl:grid-rows-[1fr_360px]">
-          <section className="overflow-hidden border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Geospatial Operations Map</h2>
-            </div>
-            <div className="h-[min(62vh,460px)] min-h-[360px] xl:h-full">
-              <GeospatialMap
-                pfz={pfz}
-                alerts={alerts}
-                mapState={mapState}
-                onMapChange={(nextMapState) => {
-                  setMapState(nextMapState);
-                  saveMapState(nextMapState);
-                }}
-              />
-            </div>
-          </section>
-
-          <section className="border border-slate-300 bg-white">
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-              <h2 className="text-base font-semibold">Why JalNetra recommends this</h2>
-              <p className="mt-1 text-xs text-slate-600">Follow the evidence from your question through each specialist to the final answer.</p>
-            </div>
-              <ReasoningTracePanel trace={trace} logs={logs} />
-          </section>
+        <section className={`map-column ${!showMap ? "mobile-hidden" : ""}`}>
+          <div className="map-heading"><div><p className="eyebrow">Live view</p><h2>{message(appLanguage, "marineMap")}</h2></div><span className="layer-summary">{layerSummary}</span></div>
+          <div className="map-frame"><GeospatialMap pfz={pfz} alerts={alerts} mapState={mapState} onMapChange={(nextMapState) => { setMapState(nextMapState); saveMapState(nextMapState); }} /></div>
+          <div className="map-footer"><span><i className="legend-dot zone" />Potential fishing zones</span><span><i className="legend-dot boundary" />Operating boundary</span></div>
         </section>
       </section>
+      {showSettings && <div className="settings-backdrop" role="presentation" onClick={() => setShowSettings(false)}><section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-title"><h2 id="settings-title">{message(appLanguage, "settings")}</h2><button type="button" onClick={() => setShowSettings(false)} aria-label={message(appLanguage, "close")}>×</button></div><label htmlFor="app-language">{message(appLanguage, "appLanguage")}</label><select id="app-language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label htmlFor="voice-language">{message(appLanguage, "inputLanguage")}</label><select id="voice-language" value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></section></div>}
     </main>
   );
 }

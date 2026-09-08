@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useMap, useMapEvents } from "react-leaflet";
 import { GeoJSON, MapContainer, TileLayer } from "react-leaflet";
 
@@ -95,6 +95,23 @@ function MapStateRestorer({ mapState }) {
   return null;
 }
 
+function MapSizeObserver() {
+  const map = useMap();
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const container = map.getContainer();
+    const resize = () => map.invalidateSize({ pan: false, animate: false });
+    containerRef.current = container;
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [map]);
+
+  return null;
+}
+
 export default function LeafletMapInner({ pfz, alerts, mapState, onMapChange }) {
   const activeAlerts = alertCollection(alerts);
 
@@ -114,6 +131,7 @@ export default function LeafletMapInner({ pfz, alerts, mapState, onMapChange }) 
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <MapSizeObserver />
       <MapStateRestorer mapState={mapState} />
       <MapStateSaver onMapChange={onMapChange} />
       {pfz?.features?.length ? (

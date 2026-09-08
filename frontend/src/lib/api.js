@@ -19,7 +19,8 @@ async function requestJson(path, options = {}) {
     });
 
     if (!response.ok) {
-      throw new ApiError(`Backend returned ${response.status}`, response.status);
+      const payload = await response.json().catch(() => ({}));
+      throw new ApiError(payload.detail || `Backend returned ${response.status}`, response.status);
     }
 
     return response.json();
@@ -55,6 +56,13 @@ export function postQuery(query, { language = "en-IN", userId = "dashboard-user"
   return requestJson("/api/v1/query", {
     method: "POST",
     body: JSON.stringify({ query, language, user_id: userId, latitude, longitude }),
+  });
+}
+
+export function synthesizeSpeech(text, language) {
+  return requestJson("/api/v1/speech", {
+    method: "POST",
+    body: JSON.stringify({ text, language }),
   });
 }
 
