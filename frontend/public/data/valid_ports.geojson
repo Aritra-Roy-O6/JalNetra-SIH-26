@@ -1,0 +1,60 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Digha", "state": "West Bengal" },
+      "geometry": { "type": "Point", "coordinates": [87.52, 21.62] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kakdwip", "state": "West Bengal" },
+      "geometry": { "type": "Point", "coordinates": [88.18, 21.87] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Frazerganj", "state": "West Bengal" },
+      "geometry": { "type": "Point", "coordinates": [88.25, 21.58] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Namkhana", "state": "West Bengal" },
+      "geometry": { "type": "Point", "coordinates": [88.23, 21.77] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Paradip", "state": "Odisha" },
+      "geometry": { "type": "Point", "coordinates": [86.70, 20.31] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Visakhapatnam", "state": "Andhra Pradesh" },
+      "geometry": { "type": "Point", "coordinates": [83.29, 17.69] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Chennai", "state": "Tamil Nadu" },
+      "geometry": { "type": "Point", "coordinates": [80.29, 13.08] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Kochi", "state": "Kerala" },
+      "geometry": { "type": "Point", "coordinates": [76.28, 9.97] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Goa", "state": "Goa" },
+      "geometry": { "type": "Point", "coordinates": [73.81, 15.46] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Mumbai", "state": "Maharashtra" },
+      "geometry": { "type": "Point", "coordinates": [72.95, 18.95] }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Veraval", "state": "Gujarat" },
+      "geometry": { "type": "Point", "coordinates": [70.37, 20.90] }
+    }
+  ]
+}

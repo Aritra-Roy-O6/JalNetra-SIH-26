@@ -47,6 +47,7 @@ markdown-it-py==4.2.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
 narwhals==2.25.0
+nest-asyncio==1.6.0
 networkx==3.6.1
 numpy==2.5.2
 orjson==3.12.0

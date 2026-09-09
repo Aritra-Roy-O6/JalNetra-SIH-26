@@ -1,16 +1,33 @@
-"""Wind observation specialist using INCOIS ERDDAP."""
+"""Weather and marine hazard specialist."""
+
+import asyncio
 
 from app.agents.state import AgentState
-from app.services.marine_data import MarineDataError, fetch_copernicus_wind
+from app.agents.weather_safety import check_hazard_thresholds, fetch_weather
 
 
 def weather_safety_agent(state: AgentState) -> AgentState:
     location = state.get("location") or {}
-    if "latitude" not in location or "longitude" not in location:
-        return {"weather_result": {"available": False, "error": "Select a map location to retrieve a CMEMS wind observation."}}
+    lat = location.get("latitude") if location.get("latitude") is not None else 21.63
+    lon = location.get("longitude") if location.get("longitude") is not None else 87.51
     try:
-        source = fetch_copernicus_wind(location["latitude"], location["longitude"])
-    except MarineDataError as error:
-        return {"weather_result": {"available": False, "error": str(error)}}
-    wind = {"wind_speed": source["wind_speed"], "wind_direction_deg": source["wind_direction_deg"], "observed_at": source["observed_at"], "source": source["source"]}
-    return {"weather_result": {"available": True, "safe": None, "raw_values": wind, "reasons": [f"CMEMS observed wind is {wind['wind_speed']:.1f} m/s."], "alerts": []}}
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        import nest_asyncio
+        nest_asyncio.apply()
+        source = loop.run_until_complete(fetch_weather(lat, lon))
+    else:
+        source = asyncio.run(fetch_weather(lat, lon))
+    if not source.get("available", True):
+        return {"weather_result": {"available": False, "error": source.get("error", "Weather is unavailable."), "stale": source.get("stale", False)}}
+    hourly = source.get("marine", {}).get("hourly", {})
+    forecast = source.get("forecast", {}).get("hourly", {})
+    values = {
+        "wave_height_m": (hourly.get("wave_height") or [0])[0],
+        "wind_speed_kmph": (forecast.get("wind_speed_10m") or [0])[0],
+        "lightning_probability_pct": (forecast.get("precipitation_probability") or [0])[0],
+    }
+    hazards = check_hazard_thresholds(values)
+    return {"weather_result": {"available": True, **hazards, "stale": source.get("stale", False), "source": source.get("source", "Open-Meteo")}}

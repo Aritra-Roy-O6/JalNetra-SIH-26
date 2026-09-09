@@ -1,0 +1,12 @@
+[tool.pyrefly]
+# Ignore missing stubs for third-party packages that don't ship type information.
+# copernicusmarine, xarray, dask, zarr, h5py, etc. are scientific packages
+# without py.typed markers - suppress those false positives.
+ignore_missing_imports = true
+untyped_imports = "ignore"
+# Only analyse first-party application code
+include = ["app"]
+exclude = [
+  "**/test_*.py",
+  "**/__pycache__/**",
+]

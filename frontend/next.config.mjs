@@ -21,6 +21,20 @@ const nextConfig = {
       },
     ];
   },
+  async headers() {
+    return [
+      {
+        source: "/api/v1/:path*",
+        headers: [{ key: "x-accel-buffering", value: "no" }],
+      },
+    ];
+  },
+  httpAgentOptions: {
+    keepAlive: true,
+  },
+  experimental: {
+    proxyTimeout: 90_000,
+  },
 };
 
 const withPWA = (nextPWA.default || nextPWA)({

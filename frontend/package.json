@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
+    "@turf/distance": "^7.4.0",
     "@turf/helpers": "^7.4.0",
+    "@turf/nearest-point": "^7.4.0",
     "@turf/nearest-point-on-line": "^7.4.0",
     "@xyflow/react": "^12.11.6",
     "dexie": "^4.4.5",
+    "firebase": "^12.18.0",
     "i18next": "^26.4.2",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.42.0",

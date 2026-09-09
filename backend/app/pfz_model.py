@@ -38,8 +38,8 @@ def load_pfz_model() -> Any:
 
 
 def predict_pfz(features: dict[str, float], model: Any | None = None) -> dict:
-    model = model or load_pfz_model()
-    if error := getattr(model, "_jalnetra_runtime_error", None):
+    loaded_model: Any = model or load_pfz_model()
+    if error := getattr(loaded_model, "_jalnetra_runtime_error", None):
         raise RuntimeError(f"PFZ model artifact is incompatible with the installed scikit-learn runtime: {error}")
     missing = [name for name in MODEL_FEATURES if name not in features]
     aligned: dict[str, float] = {}
@@ -59,8 +59,8 @@ def predict_pfz(features: dict[str, float], model: Any | None = None) -> dict:
     if missing or invalid:
         raise ValueError(f"PFZ feature contract failed; missing={missing}, invalid={invalid}")
     row = pd.DataFrame([[aligned[name] for name in MODEL_FEATURES]], columns=MODEL_FEATURES)
-    label = int(model.predict(row)[0])
-    confidence = float(model.predict_proba(row)[0][label]) if hasattr(model, "predict_proba") else float(label)
+    label = int(loaded_model.predict(row)[0])
+    confidence = float(loaded_model.predict_proba(row)[0][label]) if hasattr(loaded_model, "predict_proba") else float(label)
     return {"label": label, "confidence_score": round(confidence, 4), "features": aligned}
 
 

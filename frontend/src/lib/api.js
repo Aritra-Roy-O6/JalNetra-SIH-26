@@ -45,7 +45,11 @@ function withParams(path, params = {}) {
 }
 
 export function fetchPFZ(params) {
-  return requestJson(withParams("/api/v1/pfz", params));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 40_000);
+  return requestJson(withParams("/api/v1/pfz", params), { signal: controller.signal }).finally(
+    () => clearTimeout(timer)
+  );
 }
 
 export function fetchAlerts(params) {
@@ -56,6 +60,13 @@ export function postQuery(query, { language = "en-IN", userId = "dashboard-user"
   return requestJson("/api/v1/query", {
     method: "POST",
     body: JSON.stringify({ query, language, user_id: userId, latitude, longitude }),
+  });
+}
+
+export function postRoute(origin, destination, vesselType = "motorized_boat") {
+  return requestJson("/api/v1/route", {
+    method: "POST",
+    body: JSON.stringify({ origin, destination, vessel_type: vesselType }),
   });
 }
 

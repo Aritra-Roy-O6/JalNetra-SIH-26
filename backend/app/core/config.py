@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # External APIs
     OPENAI_API_KEY: str = ""
     BHASHINI_API_KEY: str = ""
+    INCOIS_ERDDAP_BASE_URL: str = "https://erddap.incois.gov.in/erddap"
+    COPERNICUS_MARINE_USERNAME: str = ""
+    COPERNICUS_MARINE_PASSWORD: str = ""
 
     class Config:
         env_file = ".env"

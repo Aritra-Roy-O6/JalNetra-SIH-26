@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMap, useMapEvents } from "react-leaflet";
-import { Circle, CircleMarker, GeoJSON, MapContainer, TileLayer, Tooltip } from "react-leaflet";
+import { Circle, CircleMarker, GeoJSON, MapContainer, Polyline, TileLayer, Tooltip } from "react-leaflet";
 
 const ALERT_ZONES = {
   cyclone: polygonFeature("Cyclone watch", "weather_alert", [
@@ -21,19 +21,6 @@ const ALERT_ZONES = {
   ]),
 };
 
-const RESTRICTED_BOUNDARIES = {
-  type: "FeatureCollection",
-  features: [
-    polygonFeature("Seasonal fishing ban boundary", "restricted_boundary", [
-      [88.95, 19.7],
-      [89.45, 19.7],
-      [89.45, 20.85],
-      [88.95, 20.85],
-      [88.95, 19.7],
-    ]),
-  ],
-};
-
 function polygonFeature(name, zoneType, coordinates) {
   return {
     type: "Feature",
@@ -46,21 +33,24 @@ function alertCollection(alerts) {
   return {
     type: "FeatureCollection",
     features: alerts.map((alert) => ({
-      ...(ALERT_ZONES[alert.type] || ALERT_ZONES.cyclone),
+      ...(ALERT_ZONES[alert.alert_type || alert.type] || ALERT_ZONES.cyclone),
       properties: {
         ...alert,
-        name: alert.message || alert.type,
+        name: alert.title || alert.message || alert.alert_type || alert.type,
         zone_type: "weather_alert",
       },
     })),
   };
 }
 
-function styleFeature(feature, cached) {
+function styleFeature(feature, cached, pfzStale) {
   const zoneType = feature?.properties?.zone_type;
-  const cachedStyle = cached ? { opacity: 0.68, fillOpacity: 0.18, weight: 2, dashArray: "7 5" } : {};
+  const confidence = Number(feature?.properties?.confidence_score || 0);
+  const green = Math.round(90 + confidence * 100).toString(16).padStart(2, "0");
+  const computedStyle = zoneType === "potential_fishing_zone" ? { color: "#166534", fillColor: `#${green}b84a`, fillOpacity: 0.25 + confidence * 0.45, weight: 2 } : {};
+  const cachedStyle = cached || pfzStale ? { opacity: 0.68, fillOpacity: 0.18, weight: 2, dashArray: "7 5" } : {};
   if (zoneType === "potential_fishing_zone") {
-    return { color: "#15803d", fillColor: "#22c55e", fillOpacity: 0.28, weight: 2, ...cachedStyle };
+    return { ...computedStyle, ...cachedStyle };
   }
   if (zoneType === "weather_alert") {
     return { color: "#b45309", fillColor: "#f59e0b", fillOpacity: 0.22, weight: 2, ...cachedStyle };
@@ -70,7 +60,8 @@ function styleFeature(feature, cached) {
 
 function bindPopup(feature, layer) {
   const props = feature.properties || {};
-  layer.bindPopup(`<strong>${props.name || props.zone_type || "Marine zone"}</strong>`);
+  const details = props.confidence_score == null ? "" : `<br />Confidence: ${(props.confidence_score * 100).toFixed(0)}%<br />SST: ${Number(props.sst_value).toFixed(2)} C<br />Chlorophyll: ${Number(props.chlorophyll_value).toFixed(3)} mg/m3`;
+  layer.bindPopup(`<strong>${props.name || props.zone_type || "Marine zone"}</strong>${details}`);
 }
 
 function MapStateSaver({ onMapChange }) {
@@ -120,12 +111,24 @@ function CurrentLocationMarker({ location }) {
   useEffect(() => {
     if (!location || centeredRef.current) return;
     centeredRef.current = true;
-    map.setView([location.latitude, location.longitude], Math.max(map.getZoom(), 8), { animate: false });
+    map.setView([location.latitude, location.longitude], Math.max(map.getZoom(), 11), { animate: false });
   }, [location, map]);
 
   if (!location) return null;
   const center = [location.latitude, location.longitude];
-  return <><Circle center={center} radius={location.accuracy} pathOptions={{ color: "#0e7490", fillColor: "#67e8f9", fillOpacity: 0.12, weight: 1, dashArray: "4 4" }} /><CircleMarker center={center} radius={8} pathOptions={{ color: "#fff", fillColor: "#0e7490", fillOpacity: 1, weight: 3 }}><Tooltip permanent direction="top" offset={[0, -8]}>Current location</Tooltip></CircleMarker></>;
+  return <><Circle center={center} radius={location.accuracy} pathOptions={{ color: "#0e7490", fillColor: "#67e8f9", fillOpacity: 0.12, weight: 1, dashArray: "4 4" }} /><Circle center={center} radius={9260} pathOptions={{ color: "#0e7490", fill: false, opacity: 0.5, weight: 1, dashArray: "5 6" }} /><CircleMarker center={center} radius={8} pathOptions={{ color: "#fff", fillColor: "#0e7490", fillOpacity: 1, weight: 3 }}><Tooltip permanent direction="top" offset={[0, -8]}>Your vessel position</Tooltip></CircleMarker></>;
+}
+
+function RouteClickHandler({ active, onSelect }) {
+  useMapEvents({ click(event) { if (active) onSelect({ lat: event.latlng.lat, lon: event.latlng.lng }); } });
+  return null;
+}
+
+function RouteLine({ route }) {
+  const coordinates = route?.path_geojson?.geometry?.coordinates;
+  if (!coordinates?.length) return null;
+  const points = coordinates.map(([lon, lat]) => [lat, lon]);
+  return <><Polyline positions={points} pathOptions={{ color: "#0e7490", weight: 5, opacity: 0.9 }} /><Polyline positions={points} pathOptions={{ color: "#d9f4ef", weight: 2, dashArray: "8 9", opacity: 0.9 }} /><CircleMarker center={points.at(-1)} radius={7} pathOptions={{ color: "#fff", fillColor: "#16a34a", fillOpacity: 1, weight: 3 }}><Tooltip permanent direction="top">Route destination</Tooltip></CircleMarker></>;
 }
 
 function prefetchTiles(center, zoom) {
@@ -155,15 +158,25 @@ function MapTilePrefetcher({ mapState, cached }) {
   return null;
 }
 
-export default function LeafletMapInner({ pfz, alerts, mapState, cached, currentLocation, onMapChange }) {
+export default function LeafletMapInner({ pfz, alerts, mapState, cached, currentLocation, onMapChange, route, routeLoading, onRouteRequest }) {
   const activeAlerts = alertCollection(alerts);
+  const [showPfz, setShowPfz] = useState(true);
+  const [showAlerts, setShowAlerts] = useState(true);
+  const [planningRoute, setPlanningRoute] = useState(false);
+  const routePosition = route?.path_geojson?.geometry?.coordinates?.length ? route.path_geojson.geometry.coordinates.map(([lon, lat]) => [lat, lon]) : null;
+
+  function selectRouteDestination(destination) {
+    setPlanningRoute(false);
+    onRouteRequest?.(destination);
+  }
 
   return (
+    <div className="marine-map-root">
     <MapContainer
       center={mapState?.center || [20.25, 88.45]}
       zoom={mapState?.zoom || 8}
       scrollWheelZoom
-      className="h-full min-h-[360px] w-full"
+      className="marine-map-canvas"
       maxBounds={[
         [5, 66],
         [24, 99],
@@ -179,11 +192,19 @@ export default function LeafletMapInner({ pfz, alerts, mapState, cached, current
       <CurrentLocationMarker location={currentLocation} />
       <MapStateRestorer mapState={mapState} />
       <MapStateSaver onMapChange={onMapChange} />
-      {pfz?.features?.length ? (
-        <GeoJSON data={pfz} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
+      <RouteClickHandler active={planningRoute} onSelect={selectRouteDestination} />
+      <RouteLine route={route} />
+      {showPfz && pfz?.features?.length ? (
+        <GeoJSON key={`pfz-${pfz.last_updated || pfz.features.length}-${pfz.features[0]?.geometry?.coordinates?.[0]?.[0]?.[0]}`} data={pfz} style={(feature) => styleFeature(feature, cached, pfz.stale)} onEachFeature={bindPopup} />
       ) : null}
-      <GeoJSON data={activeAlerts} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
-      <GeoJSON data={RESTRICTED_BOUNDARIES} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />
+      {showAlerts && <GeoJSON data={activeAlerts} style={(feature) => styleFeature(feature, cached)} onEachFeature={bindPopup} />}
     </MapContainer>
+    <div className="marine-map-hud" aria-label="Map controls">
+      <div className="map-live-chip"><span />Live marine layers</div>
+      <div className="map-layer-controls"><button type="button" className={showPfz ? "is-active" : ""} onClick={() => setShowPfz((value) => !value)}>PFZ {pfz?.features?.length || 0}</button><button type="button" className={showAlerts ? "is-active warning" : ""} onClick={() => setShowAlerts((value) => !value)}>Alerts {alerts.length}</button></div>
+    </div>
+    <div className="route-control"><button type="button" disabled={!currentLocation || routeLoading} className={planningRoute ? "is-planning" : ""} onClick={() => setPlanningRoute((value) => !value)}>{routeLoading ? "Finding route…" : planningRoute ? "Click the map to set destination" : "Plan safe route"}</button>{route && <div><strong>{route.distance_km.toFixed(1)} km · {route.estimated_time_mins} min</strong><span>{route.hazard_notes?.[0] || "Route avoids known hazards."}</span></div>}</div>
+    {routePosition && <div className="route-endpoint">Destination set</div>}
+    </div>
   );
 }

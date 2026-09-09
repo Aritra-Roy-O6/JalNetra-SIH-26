@@ -4,10 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import GeospatialMap from "@/components/GeospatialMap";
 import ReasoningTracePanel from "@/components/ReasoningTracePanel";
 import VoiceInterface from "@/components/VoiceInterface";
-import { ApiError, fetchAlerts, fetchPFZ, postQuery, synthesizeSpeech } from "@/lib/api";
+import { ApiError, fetchAlerts, fetchPFZ, postQuery, postRoute, synthesizeSpeech } from "@/lib/api";
 import { clearChatHistory, loadLastChatMessage, loadMapState, loadOfflineSnapshot, loadRecentChatMessages, saveCachedData, saveChatMessage, saveMapState } from "@/lib/db";
 import { LOCALES, message, setAppLocale } from "@/lib/i18n";
 import { useResolvedLocation } from "@/lib/location-context";
+import { usePhoneAuth } from "@/components/PhoneAuthProvider";
 import { Languages, Settings, Trash2 } from "lucide-react";
 
 const QUICK_QUERIES = [
@@ -53,6 +54,8 @@ function SpeakerButton({ text, language, disabled }) {
 }
 
 export default function DashboardPage() {
+  const { user, signOut } = usePhoneAuth();
+  const [mounted, setMounted] = useState(false);
   const [pfz, setPfz] = useState(null);
   const [alerts, setAlerts] = useState([]);
   const [query, setQuery] = useState("");
@@ -74,7 +77,13 @@ export default function DashboardPage() {
   const [cachedAt, setCachedAt] = useState(null);
   const [showOffline, setShowOffline] = useState(false);
   const [offlineExpanded, setOfflineExpanded] = useState(false);
-  const { location, status: locationStatus, error: locationError, regions, chooseManual, changeLocation } = useResolvedLocation();
+  const [route, setRoute] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const { location, status: locationStatus, error: locationError, toastMessage, regions, chooseManual, changeLocation } = useResolvedLocation();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const loadCachedMarineData = useCallback(async () => {
     const snapshot = await loadOfflineSnapshot();
@@ -84,14 +93,17 @@ export default function DashboardPage() {
     if (timestamps.length) setCachedAt(Math.max(...timestamps));
   }, []);
 
-  const syncMarineData = useCallback(async () => {
+  const syncMarineData = useCallback(async (resolvedLocation) => {
     try {
       const [pfzData, alertData] = await Promise.all([
-        fetchPFZ({ latitude: DEFAULT_MAP_STATE.center[0], longitude: DEFAULT_MAP_STATE.center[1] }),
+        resolvedLocation ? fetchPFZ({ latitude: resolvedLocation.lat, longitude: resolvedLocation.lon }) : Promise.resolve(null),
         fetchAlerts(),
       ]);
-      await Promise.all([saveCachedData("pfz", pfzData), saveCachedData("alerts", alertData)]);
-      setPfz(pfzData);
+      if (pfzData) {
+        await saveCachedData("pfz", pfzData);
+        setPfz(pfzData);
+      }
+      await saveCachedData("alerts", alertData);
       setAlerts(alertData);
       setCachedAt(Date.now());
       setIsOffline(false);
@@ -108,16 +120,16 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setIsOffline(!navigator.onLine);
-    syncMarineData();
-    const handleOnline = () => syncMarineData();
+    syncMarineData(location);
+    const handleOnline = () => syncMarineData(location);
     const handleOffline = () => { setIsOffline(true); setStatus("Offline — showing cached marine data"); };
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
     return () => { window.removeEventListener("online", handleOnline); window.removeEventListener("offline", handleOffline); };
-  }, [syncMarineData]);
+  }, [syncMarineData, location]);
 
   useEffect(() => {
-    if (location) setMapState((current) => ({ ...current, center: [location.lat, location.lon], zoom: Math.max(current.zoom, 8) }));
+    if (location) setMapState((current) => ({ ...current, center: [location.lat, location.lon], zoom: Math.max(current.zoom, 11) }));
   }, [location]);
 
   useEffect(() => {
@@ -151,9 +163,14 @@ export default function DashboardPage() {
     try {
       const recentUserTexts = messages.filter((item) => item.role === "user").slice(-3).map((item) => item.text);
       const contextPrompt = recentUserTexts.length ? `${recentUserTexts.join("\n")}\n${submittedQuery}` : submittedQuery;
-      const result = await postQuery(contextPrompt, { language, latitude: mapState.center[0], longitude: mapState.center[1] });
+      const currentLat = location?.lat ?? mapState.center[0];
+      const currentLon = location?.lon ?? mapState.center[1];
+      const result = await postQuery(contextPrompt, { language, latitude: currentLat, longitude: currentLon });
       const answer = result.answer || "No answer returned.";
       setMessages((current) => [...current, { role: "assistant", text: answer }]);
+      if (result.geojson && result.geojson.features) {
+        setPfz(result.geojson);
+      }
       setTrace(result.visual_trace);
       setLogs(result.execution_log || []);
       setIntent(result.intent || "Marine information");
@@ -199,9 +216,21 @@ export default function DashboardPage() {
     setAppLocale(nextLanguage);
   }
 
+  async function planRoute(destination) {
+    const origin = location ? { lat: location.lat, lon: location.lon } : { lat: mapState.center[0], lon: mapState.center[1] };
+    setRouteLoading(true);
+    try {
+      setRoute(await postRoute(origin, destination));
+      setStatus("Safe route ready");
+    } catch (error) {
+      setStatus(error instanceof ApiError ? error.message : "Route could not be planned.");
+    } finally { setRouteLoading(false); }
+  }
+
   return (
     <main className="app-shell">
       {isOffline && <div className="offline-banner" role="status">Offline — showing data from {cachedAt ? formatAge(cachedAt) : "the last successful sync"}</div>}
+      {toastMessage && <div className="pfz-notice widened" role="status" style={{ margin: "8px 16px 0", borderRadius: "8px" }}><Icon name="spark" size={16} /><span>{toastMessage}</span></div>}
       <header className="app-header">
         <div className="brand-lockup"><div className="brand-mark"><span className="brand-dot" />JalNetra</div><h1>your marine assistant</h1></div>
         <div className="header-language"><Languages size={15} /><select aria-label="App language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></div>
@@ -224,7 +253,7 @@ export default function DashboardPage() {
             <div className="offline-column"><div className="offline-panel"><button type="button" className="offline-panel-trigger" onClick={() => setOfflineExpanded((current) => !current)} aria-expanded={offlineExpanded}><strong>{message(appLanguage, "offlineData")}</strong><span aria-hidden="true">{offlineExpanded ? "−" : "+"}</span></button>{offlineExpanded && <div className="offline-panel-content"><p>{message(appLanguage, isOffline ? "offlinePaused" : "offlineStored")}</p><div className="offline-stat"><strong>{cachedAt ? formatAge(cachedAt) : "No snapshot yet"}</strong><span>{message(appLanguage, "lastSync")}</span></div><div className="offline-stat"><strong>{pfz?.features?.length || 0}</strong><span>{message(appLanguage, "cachedZones")}</span></div><div className="offline-stat"><strong>{alerts.length}</strong><span>{message(appLanguage, "cachedAlerts")}</span></div><p className="offline-note">{message(appLanguage, "offlineLimit")}</p></div>}</div></div>
           </div>
 
-          <div className="chat-heading"><div className="chat-heading-copy"><p className="eyebrow">{message(appLanguage, "marineAssistant")}</p></div><button type="button" className="clear-chat-button desktop-clear-chat-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></div>
+          <div className="chat-heading"><div className="chat-heading-copy"><p className="eyebrow">{message(appLanguage, "marineAssistant")}</p></div><button type="button" suppressHydrationWarning className="clear-chat-button desktop-clear-chat-button" onClick={clearChat} disabled={!mounted || loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></div>
 
           <div className="messages" aria-live="polite">
             {!messages.length && <div className="welcome-block"><div className="welcome-icon"><Icon name="spark" size={25} /></div><p>{message(appLanguage, "prompt")}</p><div className="suggestion-grid">{QUICK_QUERIES.map(([text, label]) => <button key={text} type="button" disabled={loading} onClick={() => submitQuery(text)}><span>{label}</span><Icon name="arrow" size={14} /></button>)}</div></div>}
@@ -244,12 +273,24 @@ export default function DashboardPage() {
 
         <section className={`map-column ${!showMap ? "mobile-hidden" : ""}`}>
           <div className="map-heading"><div><p className="eyebrow">Live view</p><h2>{message(appLanguage, "marineMap")}</h2></div><span className="layer-summary">{layerSummary}</span></div>
-          <div className={`map-frame ${isOffline ? "is-cached" : ""}`}><GeospatialMap pfz={pfz} alerts={alerts} mapState={mapState} cached={isOffline} currentLocation={location ? { latitude: location.lat, longitude: location.lon, accuracy: 1000 } : null} onMapChange={(nextMapState) => { setMapState(nextMapState); saveMapState(nextMapState); }} /></div>
-          <div className="map-footer"><span><i className="legend-dot zone" />Potential fishing zones</span><span><i className="legend-dot boundary" />Operating boundary</span><span><i className="legend-dot location" />{location ? `Resolved ${location.source} location` : locationStatus}</span>{cachedAt && <span>PFZ as of {new Date(cachedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}</div>
+          {pfz && (pfz.data_availability === "no_data" || !pfz?.features?.length) && (
+            <div className="pfz-notice no-data" role="status">
+              <Icon name="spark" size={16} />
+              <span>{message(appLanguage, "pfzNoData")}</span>
+            </div>
+          )}
+          {pfz && pfz.data_availability === "widened" && (pfz?.features?.length || 0) > 0 && (
+            <div className="pfz-notice widened" role="status">
+              <Icon name="spark" size={16} />
+              <span>{message(appLanguage, "pfzWidened")}</span>
+            </div>
+          )}
+          <div className={`map-frame ${isOffline ? "is-cached" : ""}`}><GeospatialMap pfz={pfz} alerts={alerts} mapState={mapState} cached={isOffline} currentLocation={location ? { latitude: location.lat, longitude: location.lon, accuracy: 1000 } : null} route={route} routeLoading={routeLoading} onRouteRequest={planRoute} onMapChange={(nextMapState) => { setMapState(nextMapState); saveMapState(nextMapState); }} /></div>
+          <div className="map-footer"><span><i className="legend-dot zone" />Potential fishing zones</span><span><i className="legend-dot location" />{location ? `Resolved ${location.source} location` : locationStatus}</span>{pfz?.last_updated && <span>{pfz.stale ? "Last updated: " : "PFZ as of "}{new Date(pfz.last_updated).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}</div>
         </section>
         <section className={`mobile-offline-column ${!showOffline ? "mobile-hidden" : ""}`}><div className="offline-panel"><button type="button" className="offline-panel-trigger" onClick={() => setOfflineExpanded((current) => !current)} aria-expanded={offlineExpanded}><strong>{message(appLanguage, "offlineData")}</strong><span aria-hidden="true">{offlineExpanded || showOffline ? "−" : "+"}</span></button>{(offlineExpanded || showOffline) && <div className="offline-panel-content"><p>{message(appLanguage, isOffline ? "offlinePaused" : "offlineStored")}</p><div className="offline-stat"><strong>{cachedAt ? formatAge(cachedAt) : "No snapshot yet"}</strong><span>{message(appLanguage, "lastSync")}</span></div><div className="offline-stat"><strong>{pfz?.features?.length || 0}</strong><span>{message(appLanguage, "cachedZones")}</span></div><div className="offline-stat"><strong>{alerts.length}</strong><span>{message(appLanguage, "cachedAlerts")}</span></div><p className="offline-note">{message(appLanguage, "offlineLimit")}</p></div>}</div></section>
       </section>
-      {showSettings && <div className="settings-backdrop" role="presentation" onClick={() => setShowSettings(false)}><section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-title"><h2 id="settings-title">{message(appLanguage, "settings")}</h2><button type="button" onClick={() => setShowSettings(false)} aria-label={message(appLanguage, "close")}>×</button></div><label htmlFor="app-language">{message(appLanguage, "appLanguage")}</label><select id="app-language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label htmlFor="voice-language">{message(appLanguage, "inputLanguage")}</label><select id="voice-language" value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select>{location && <button type="button" className="location-change-button" onClick={changeLocation}>Change location</button>}<button type="button" className="clear-chat-button settings-clear-button" onClick={clearChat} disabled={loading || !messages.length}><Icon name="trash" size={15} />Clear chat</button></section></div>}
+      {showSettings && <div className="settings-backdrop" role="presentation" onClick={() => setShowSettings(false)}><section className="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}><div className="settings-title"><h2 id="settings-title">{message(appLanguage, "settings")}</h2><button type="button" onClick={() => setShowSettings(false)} aria-label={message(appLanguage, "close")}>×</button></div><label htmlFor="app-language">{message(appLanguage, "appLanguage")}</label><select id="app-language" value={appLanguage} onChange={(event) => changeAppLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><label htmlFor="voice-language">{message(appLanguage, "inputLanguage")}</label><select id="voice-language" value={voiceLanguage} onChange={(event) => setVoiceLanguage(event.target.value)}>{LOCALES.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select>{location && <button type="button" className="location-change-button" onClick={changeLocation}>Change location</button>}<button type="button" suppressHydrationWarning className="clear-chat-button settings-clear-button" onClick={clearChat} disabled={Boolean(loading || !messages.length)}><Icon name="trash" size={15} />Clear chat</button><button type="button" className="auth-link settings-signout" onClick={() => signOut()}>{user.phoneNumber ? `Sign out (${user.phoneNumber})` : "Sign out"}</button></section></div>}
     </main>
   );
 }

@@ -8,17 +8,22 @@ def synthesizing_agent(state: AgentState) -> AgentState:
     intent = state.get("intent", "Weather")
     logs = [
         {"level": "info", "stage": "input", "message": f"Received {state.get('detected_language', 'en-IN')} input."},
-        {"level": "info", "stage": "translation", "message": f"English context: {state.get('translated_query', state['query'])}"},
+        {"level": "info", "stage": "translation", "message": f"English context: {state.get('translated_query') or state.get('query', '')}"},
         {"level": "info", "stage": "intent", "message": f"Selected {intent} specialist."},
     ]
-    evidence, nodes = [], [{"id": "input", "label": state["query"], "type": "input"}, {"id": "intent", "label": intent, "type": "agent"}]
+    evidence, nodes = [], [{"id": "input", "label": state.get("query", ""), "type": "input"}, {"id": "intent", "label": intent, "type": "agent"}]
     geojson = None
     ocean = state.get("ocean_result")
     if ocean:
         if ocean.get("available"):
             candidate = ocean["candidates"][0]
-            evidence.append(f"The live PFZ model confidence is {candidate['confidence_score']:.0%}")
-            logs.append({"level": "success", "stage": "copernicus", "message": "Live Copernicus features passed the PFZ model contract."})
+            confidence_pct = round(candidate['confidence_score'] * 100)
+            sst_val = f"{candidate['sst_celsius']:.2f}"
+            chlo_val = f"{candidate['chlorophyll_mg_m3']:.3f}"
+            evidence.append(f"The potential fishing zone model confidence is {confidence_pct} percent.")
+            evidence.append(f"The sea surface temperature is {sst_val} degrees Celsius.")
+            evidence.append(f"The chlorophyll concentration is {chlo_val} milligrams per cubic meter.")
+            logs.append({"level": "success", "stage": "pfz", "message": "Live sea surface temperature and chlorophyll values passed the potential fishing zone scoring contract."})
             geojson = ocean.get("geojson")
         else:
             evidence.append(ocean["error"])
@@ -30,16 +35,21 @@ def synthesizing_agent(state: AgentState) -> AgentState:
     weather = state.get("weather_result")
     if weather:
         if weather.get("available"):
-            evidence.extend(weather["reasons"])
-            logs.append({"level": "success", "stage": "incois", "message": "Retrieved current INCOIS wind observation."})
+            raw_values = weather.get("raw_values", {})
+            evidence.append(f"The wave height is {float(raw_values.get('wave_height_m', 0)):.1f} meters.")
+            evidence.append(f"The wind speed is {float(raw_values.get('wind_speed_kmph', 0)):.1f} kilometers per hour.")
+            evidence.append(f"The lightning probability is {float(raw_values.get('lightning_probability_pct', 0)):.0f} percent.")
+            evidence.extend(weather.get("reasons", []))
+            evidence.append("Current marine conditions are within safe thresholds." if weather.get("safe") else "Current marine conditions exceed safe thresholds.")
+            logs.append({"level": "success", "stage": "open-meteo", "message": "Retrieved current marine weather and forecast data."})
         else:
             evidence.append(weather["error"])
-            logs.append({"level": "warning", "stage": "incois", "message": weather["error"]})
+            logs.append({"level": "warning", "stage": "weather", "message": weather["error"]})
     for name, result in (("geofence", state.get("geofence_result")), ("route", state.get("route_result"))):
         if result and not result.get("available", True):
             evidence.append(result["error"])
             logs.append({"level": "warning", "stage": name, "message": result["error"]})
-    english = ". ".join(item.rstrip(".") for item in evidence) + "." if evidence else "No marine evidence was available for this request."
+    english = " ".join(item.rstrip(".") + "." for item in evidence) if evidence else "No marine evidence was available for this request."
     candidate = ocean.get("candidates", [{}])[0] if ocean else {}
     available = bool((ocean or {}).get("available") or (weather or {}).get("available"))
     answer = translate_answer(intent, state.get("requested_language", "en-IN"), {

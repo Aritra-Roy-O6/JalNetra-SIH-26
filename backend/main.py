@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.language import normalize_language
 from app.services.gemini_service import GeminiServiceError, answer_query, translate_from_english, translate_to_english
 from services.sarvam_service import SarvamServiceError, speech_to_text, text_to_speech
+from app.api.v1.endpoints import routes, trace
 
 
 app = FastAPI(title="JalNetra API", version="0.1.0")
@@ -17,6 +18,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(routes.router, prefix="/api/v1")
+app.include_router(trace.router, prefix="/api/v1")
 class QueryRequest(BaseModel):
     """Natural-language query submitted to the prototype assistant."""
 
@@ -34,9 +37,12 @@ class SpeechRequest(BaseModel):
 
 
 @app.get("/api/v1/pfz")
-def get_pfz(latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
-    """Keep the map contract while PFZ model work is intentionally paused."""
-    return {"model_features": [], "prediction": None, "features": []}
+async def get_pfz(latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
+    """Return a computed PFZ GeoJSON layer around the resolved location."""
+    if latitude is None or longitude is None:
+        return {"type": "FeatureCollection", "features": [], "stale": False, "error": "A resolved location is required."}
+    from app.agents.ocean_analytics import computed_pfz
+    return await computed_pfz(latitude, longitude)
 
 
 @app.get("/api/v1/alerts")
@@ -46,25 +52,32 @@ def get_alerts() -> list[dict]:
 
 
 def run_query(query: str, language: str = "en-IN", latitude: float | None = None, longitude: float | None = None, distance_to_coast_km: float | None = None) -> dict:
-    """Translate and answer with Gemini without invoking data or prediction models."""
+    """Run the canonical specialist graph for a location-aware answer."""
     requested_language = normalize_language(language)
     if not query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    from app.graph import graph
 
-    translated_query = translate_to_english(query, requested_language)
-    english_answer = answer_query(translated_query)
-    answer = translate_from_english(english_answer, requested_language)
-    intent = "Marine information"
-    return {
+    result = graph.invoke({
         "query": query,
         "original_query": query,
-        "translated_query": translated_query,
-        "language": requested_language,
-        "intent": intent,
-        "answer": answer,
-        "visual_trace": {"nodes": [{"id": "input", "label": query, "type": "input"}, {"id": "response", "label": "Gemini response", "type": "service"}], "edges": [{"source": "input", "target": "response", "label": "translated and answered"}]},
-        "geojson": None,
-        "execution_log": [{"level": "success", "stage": "response", "message": "Answered with Gemini; data and prediction models are paused."}],
+        "requested_language": requested_language,
+        "location": ({
+            "latitude": latitude,
+            "longitude": longitude,
+            "distance_to_coast_km": distance_to_coast_km,
+        } if latitude is not None and longitude is not None else {}),
+    })
+    return {
+        "query": query,
+        "original_query": result.get("original_query", query),
+        "translated_query": result.get("translated_query", query),
+        "language": result.get("requested_language", requested_language),
+        "intent": result.get("intent", "Weather"),
+        "answer": result.get("response", "No answer could be prepared."),
+        "visual_trace": result.get("visual_trace"),
+        "geojson": result.get("geojson"),
+        "execution_log": result.get("execution_log", []),
     }
 
 

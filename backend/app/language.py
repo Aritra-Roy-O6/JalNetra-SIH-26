@@ -12,6 +12,8 @@ LANGUAGE_NAMES = {
 QUERY_TRANSLATIONS = {
     "hi-IN": {
         "मछली कहाँ है": "where fish", "मछली कहाँ मिलेगी": "where fish",
+        "माँस धरते": "where fish", "मछली पकड़ने": "where fish", "कहां जाना चाहिए": "where fish",
+        "कहाँ जाना चाहिए": "where fish", "धरते": "where fish", "माँस": "where fish",
         "सीमा चेतावनी": "boundary warning", "कम पकड़ क्यों": "why low catch",
         "कल समुद्र जाना सुरक्षित है": "is it safe to sail tomorrow",
     },
@@ -20,10 +22,14 @@ QUERY_TRANSLATIONS = {
         "பிடிப்பு ஏன் குறைவு": "why low catch", "நாளை கடலுக்கு செல்வது பாதுகாப்பானதா": "is it safe to sail tomorrow",
     },
     "te-IN": {
-        "చేపలు ఎక్కడ ఉన్నాయి": "where fish", "సరిహద్దు హెచ్చరిక": "boundary warning",
+        "చేపలు ఎక్కడ ఉన్నాయి": "where fish", "సரிహద్దు హెచ్చరిక": "boundary warning",
         "పట్టుబడి ఎందుకు తక్కువగా ఉంది": "why low catch",
     },
-    "bn-IN": {"মাছ কোথায়": "where fish", "সীমানা সতর্কতা": "boundary warning", "ধরা কম কেন": "why low catch"},
+    "bn-IN": {
+        "মাছ কোথায়": "where fish", "কোথায় যেতে হবে": "where fish", "মাছ ধরতে": "where fish",
+        "মাছ": "where fish", "ধরা": "where fish", "সীমানা সতর্কতা": "boundary warning", "ধরা কম কেন": "why low catch",
+        "माँस धरते": "where fish", "माँस": "where fish", "धरते": "where fish", "कहाँ जाना चाहिए": "where fish",
+    },
     "od-IN": {"ମାଛ କେଉଁଠାରେ": "where fish", "ସୀମା ସତର୍କତା": "boundary warning", "ଧରା କମ କାହିଁକି": "why low catch"},
     "ml-IN": {"മീൻ എവിടെ": "where fish", "അതിർത്തി മുന്നറിയിപ്പ്": "boundary warning", "പിടിത്തം കുറയുന്നത് എന്തുകൊണ്ട്": "why low catch"},
     "kn-IN": {"ಮೀನು ಎಲ್ಲಿದೆ": "where fish", "ಗಡಿ ಎಚ್ಚರಿಕೆ": "boundary warning", "ಹಿಡಿತ ಏಕೆ ಕಡಿಮೆ": "why low catch"},
@@ -31,29 +37,29 @@ QUERY_TRANSLATIONS = {
 
 ANSWER_TRANSLATIONS = {
     "hi-IN": {
-        "PFZ": "मछली पकड़ने का अच्छा क्षेत्र {location} के पास है। भरोसा {confidence} है।",
-        "Weather": "अभी समुद्र में जाना सुरक्षित नहीं है। लहरें {wave} मीटर हैं और सुरक्षित सीमा {threshold} मीटर है।",
+        "PFZ": "मछली पकड़ने का क्षेत्र {location} के पास है। {english}",
+        "Weather": "{english}",
         "Regulation": "चेतावनी: {zone} में {restriction} सक्रिय है।",
         "Route": "सुरक्षित मार्ग {hazards} से बचता है।",
         "Trend": "कम पकड़ का कारण कमजोर समुद्री स्थिति और PFZ से बाहर मछली पकड़ना हो सकता है।",
     },
     "ta-IN": {
-        "PFZ": "நல்ல மீன்பிடி பகுதி {location} அருகில் உள்ளது. நம்பிக்கை {confidence}.",
-        "Weather": "இப்போது கடலுக்கு செல்வது பாதுகாப்பானது அல்ல. அலை உயரம் {wave} மீட்டர்; பாதுகாப்பு வரம்பு {threshold} மீட்டர்.",
+        "PFZ": "மீன்பிடி பகுதி {location} அருகில் உள்ளது. {english}",
+        "Weather": "{english}",
         "Regulation": "எச்சரிக்கை: {zone} பகுதியில் {restriction} செயல்பாட்டில் உள்ளது.",
         "Route": "பாதுகாப்பான பாதை {hazards} பகுதிகளைத் தவிர்க்கிறது.",
         "Trend": "குறைந்த பிடிப்புக்கு பலவீனமான கடல் நிலையும் PFZ க்கு வெளியே மீன்பிடிப்பதும் காரணமாக இருக்கலாம்.",
     },
     "te-IN": {
-        "PFZ": "మంచి చేపల వేట ప్రాంతం {location} దగ్గర ఉంది. నమ్మకం {confidence}.",
-        "Weather": "ఇప్పుడు సముద్రానికి వెళ్లడం సురక్షితం కాదు. అలల ఎత్తు {wave} మీటర్లు; భద్రత పరిమితి {threshold} మీటర్లు.",
+        "PFZ": "చేపల வேట ప్రాంతం {location} దగ్గర ఉంది. {english}",
+        "Weather": "{english}",
         "Regulation": "హెచ్చరిక: {zone} లో {restriction} అమల్లో ఉంది.",
         "Route": "సురక్షిత మార్గం {hazards} ప్రాంతాలను తప్పిస్తుంది.",
         "Trend": "తక్కువ వేటకు బలహీనమైన సముద్ర పరిస్థితులు కారణం కావచ్చు.",
     },
     "bn-IN": {
-        "PFZ": "{location} এর কাছে ভালো মাছ ধরার এলাকা আছে। আত্মবিশ্বাস {confidence}।",
-        "Weather": "এখন সমুদ্রে যাওয়া নিরাপদ নয়। ঢেউ {wave} মিটার; নিরাপদ সীমা {threshold} মিটার।",
+        "PFZ": "সম্ভাব্য মাছ ধরার এলাকা চিহ্নিত করা হয়েছে। {english}",
+        "Weather": "{english}",
         "Regulation": "সতর্কতা: {zone}-এ {restriction} চালু আছে।",
         "Route": "নিরাপদ পথ {hazards} এড়িয়ে চলে।",
         "Trend": "কম মাছ ধরার কারণ দুর্বল সমুদ্র পরিস্থিতি হতে পারে।",
@@ -87,11 +93,13 @@ def normalize_language(language: str | None) -> str:
 def detect_language(text: str, requested: str | None = None) -> str:
     if requested in LANGUAGE_NAMES and requested != "en-IN":
         return requested
+    if re.search(r"[\u0980-\u09FF]", text): return "bn-IN"
     if re.search(r"[\u0900-\u097F]", text): return "hi-IN"
     if re.search(r"[\u0B80-\u0BFF]", text): return "ta-IN"
     if re.search(r"[\u0C00-\u0C7F]", text): return "te-IN"
-    if re.search(r"[\u0980-\u09FF]", text): return "bn-IN"
     if re.search(r"[\u0B00-\u0B7F]", text): return "od-IN"
+    if re.search(r"[\u0D00-\u0D7F]", text): return "ml-IN"
+    if re.search(r"[\u0C80-\u0CFF]", text): return "kn-IN"
     return "en-IN"
 
 def translate_to_english(text: str, language: str) -> str:
@@ -103,5 +111,11 @@ def translate_to_english(text: str, language: str) -> str:
 def translate_answer(intent: str, language: str, values: dict) -> str:
     if values.get("available") is False:
         return values["english"]
+    if language != "en-IN":
+        try:
+            from app.services.gemini_service import translate_from_english
+            return translate_from_english(values["english"], language)
+        except Exception:
+            pass
     template = ANSWER_TRANSLATIONS.get(language, {}).get(intent)
     return template.format(**values) if template else values["english"]
